@@ -1,0 +1,40 @@
+# Packaged extension builds (regenerate with `zip -r ... `)
+*.zip
+*.crx
+*.pem
+dist/
+build/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# Node (if tooling gets added later)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs & temp
+*.log
+*.tmp
+.cache/

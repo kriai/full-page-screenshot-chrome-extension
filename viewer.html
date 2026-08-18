@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Full Page Screenshot</title>
+  <style>
+    body {
+      margin: 0;
+      background: #1e1e22;
+      color: #eee;
+      font-family: system-ui, sans-serif;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 10px 16px;
+      background: #2a2a30;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    }
+    header h1 {
+      font-size: 14px;
+      font-weight: 600;
+      margin: 0;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #dimensions { font-size: 12px; color: #aaa; }
+    #download {
+      background: #4f7cff;
+      color: #fff;
+      text-decoration: none;
+      font-size: 13px;
+      padding: 6px 14px;
+      border-radius: 6px;
+    }
+    main { display: flex; justify-content: center; padding: 24px; }
+    #result {
+      max-width: 100%;
+      height: auto;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+    }
+    #status { padding: 40px; text-align: center; color: #aaa; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="title">Full Page Screenshot</h1>
+    <span id="dimensions"></span>
+    <a id="download" hidden>Download PNG</a>
+  </header>
+  <main>
+    <div id="status">Stitching screenshot…</div>
+    <img id="result" hidden alt="Full page screenshot" />
+  </main>
+  <script src="viewer.js"></script>
+</body>
+</html>
