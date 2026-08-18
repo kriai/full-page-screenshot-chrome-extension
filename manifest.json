@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Full Page Screenshot",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Capture, copy, and export page screenshots.",
   "permissions": [
     "activeTab",
