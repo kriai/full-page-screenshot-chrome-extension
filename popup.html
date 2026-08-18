@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Screenshot Capture</title>
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      --bg: #111318;
+      --panel: #1b1f27;
+      --panel-2: #232833;
+      --line: #343b49;
+      --text: #f4f7fb;
+      --muted: #9da8b8;
+      --accent: #6c8cff;
+      --accent-2: #43d1a6;
+    }
+    body {
+      width: 264px;
+      margin: 0;
+      padding: 12px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, sans-serif;
+    }
+    .popup-title {
+      margin: 0 0 10px;
+      padding: 0 2px 10px;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+      font-weight: 750;
+      letter-spacing: 0;
+    }
+    button {
+      display: block;
+      width: 100%;
+      min-height: 42px;
+      margin: 0 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      text-align: left;
+      padding: 9px 11px;
+      cursor: pointer;
+    }
+    button:last-of-type { margin-bottom: 0; }
+    button:hover {
+      background: var(--panel-2);
+      border-color: var(--accent);
+    }
+    button:disabled { cursor: default; opacity: 0.65; }
+    button.primary {
+      background: #243058;
+      border-color: #405bad;
+    }
+    button .label {
+      display: block;
+      font-weight: 700;
+    }
+    button .sub {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    #history {
+      margin-top: 10px;
+      background: #18251f;
+      border-color: #285645;
+    }
+    #history:hover { border-color: var(--accent-2); }
+    #status {
+      min-height: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    #status:empty { display: none; }
+    #status:not(:empty) { margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1 class="popup-title">Full Page Screenshot</h1>
+  <button class="primary" data-mode="fullPage">
+    <span class="label">Capture full page</span>
+    <span class="sub">Scroll and stitch the whole page</span>
+  </button>
+  <button data-mode="visible">
+    <span class="label">Capture visible area</span>
+    <span class="sub">Grab the current viewport</span>
+  </button>
+  <button data-mode="selection">
+    <span class="label">Select area</span>
+    <span class="sub">Drag a region on the page</span>
+  </button>
+  <button id="history" type="button">
+    <span class="label">Open history</span>
+    <span class="sub">View autosaved captures</span>
+  </button>
+  <div id="status"></div>
+  <script src="popup.js"></script>
+</body>
+</html>
