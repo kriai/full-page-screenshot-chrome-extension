@@ -5,6 +5,9 @@
 dist/
 build/
 
+# Chrome Web Store listing assets (kept locally, not source)
+store-assets/
+
 # OS files
 .DS_Store
 .DS_Store?
