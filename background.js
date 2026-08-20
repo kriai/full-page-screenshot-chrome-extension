@@ -71,15 +71,28 @@ async function captureVisibleArea(tab) {
   await updateCaptureProgress(tabId, {
     current: 0,
     total: 1,
-    label: "Capturing visible area",
+    label: "Preparing visible area",
+    detail: "Checking viewport size",
   });
   await sleep(250);
+  await updateCaptureProgress(tabId, {
+    current: 0,
+    total: 1,
+    label: "Capturing visible area",
+    detail: "Hiding capture overlay",
+  });
   await updateCaptureProgress(tabId, { hidden: true });
   await sleep(80);
 
   const metrics = await getVisibleMetrics(tabId);
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
     format: "png",
+  });
+  await updateCaptureProgress(tabId, {
+    current: 1,
+    total: 1,
+    label: "Preparing editor",
+    detail: "Saving capture",
   });
   await updateCaptureProgress(tabId, { remove: true });
 
@@ -105,14 +118,27 @@ async function captureSelectedArea(tab) {
   await updateCaptureProgress(tabId, {
     current: 0,
     total: 1,
-    label: "Capturing selected area",
+    label: "Preparing selected area",
+    detail: "Using selected region",
   });
   await sleep(250);
+  await updateCaptureProgress(tabId, {
+    current: 0,
+    total: 1,
+    label: "Capturing selected area",
+    detail: "Hiding capture overlay",
+  });
   await updateCaptureProgress(tabId, { hidden: true });
   await sleep(80);
   const metrics = await getVisibleMetrics(tabId);
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
     format: "png",
+  });
+  await updateCaptureProgress(tabId, {
+    current: 1,
+    total: 1,
+    label: "Preparing editor",
+    detail: "Cropping selection",
   });
   await updateCaptureProgress(tabId, { remove: true });
 
@@ -287,6 +313,7 @@ function renderCaptureProgress(progress) {
       <strong style="font-size:13px;font-weight:700;">${progress.label || "Capturing screenshot"}</strong>
       <span style="color:#b9c2d0;font-size:12px;">${current}/${total}</span>
     </div>
+    <div style="margin:-4px 0 10px;color:#b9c2d0;font-size:12px;line-height:1.35;">${progress.detail || "Please keep this tab active."}</div>
     <div style="height:7px;overflow:hidden;border-radius:999px;background:#343946;">
       <div style="height:100%;width:${percent}%;border-radius:999px;background:#78a0ff;transition:width 160ms ease;"></div>
     </div>
@@ -318,7 +345,8 @@ async function captureFullPage(tab) {
   await updateCaptureProgress(tabId, {
     current: 0,
     total: positions.length,
-    label: "Capturing full page",
+    label: "Preparing full page",
+    detail: `${positions.length} section${positions.length === 1 ? "" : "s"} to capture`,
   });
 
   const frames = [];
@@ -352,9 +380,16 @@ async function captureFullPage(tab) {
     await updateCaptureProgress(tabId, {
       current: i,
       total: positions.length,
-      label: "Capturing full page",
+      label: `Positioning section ${i + 1}`,
+      detail: "Scrolling and waiting for content to settle",
     });
     await sleep(CAPTURE_DELAY_MS);
+    await updateCaptureProgress(tabId, {
+      current: i,
+      total: positions.length,
+      label: `Capturing section ${i + 1}`,
+      detail: "Hiding capture overlay",
+    });
     await updateCaptureProgress(tabId, { hidden: true });
     await sleep(80);
 
@@ -367,9 +402,17 @@ async function captureFullPage(tab) {
     await updateCaptureProgress(tabId, {
       current: i + 1,
       total: positions.length,
-      label: "Capturing full page",
+      label: `Captured section ${i + 1}`,
+      detail: `${positions.length - i - 1} section${positions.length - i - 1 === 1 ? "" : "s"} remaining`,
     });
   }
+
+  await updateCaptureProgress(tabId, {
+    current: positions.length,
+    total: positions.length,
+    label: "Restoring page",
+    detail: "Putting scroll position and sticky elements back",
+  });
 
   // Restore the page: unhide fixed elements, scroll back to where the user was.
   await exec(
@@ -383,6 +426,12 @@ async function captureFullPage(tab) {
     },
     [metrics.originalScrollY]
   );
+  await updateCaptureProgress(tabId, {
+    current: positions.length,
+    total: positions.length,
+    label: "Preparing editor",
+    detail: "Stitching captured sections",
+  });
   await updateCaptureProgress(tabId, { remove: true });
   await chrome.action.setBadgeText({ text: "", tabId });
 

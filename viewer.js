@@ -13,6 +13,8 @@ const editor = {
   operations: [],
   redoStack: [],
   selectedIndex: -1,
+  zoom: 1,
+  zoomMode: "fit",
 };
 
 const toolHints = {
@@ -317,6 +319,7 @@ function pushOperation(operation, baseName = editor.baseName) {
   editor.redoStack = [];
   editor.selectedIndex = editor.operations.length - 1;
   redraw();
+  syncEditActionState();
   scheduleExportRefresh(baseName);
 }
 
@@ -807,6 +810,100 @@ function scheduleExportRefresh(baseName) {
   }, 120);
 }
 
+function pulseFeedback(element) {
+  element.classList.remove("feedback");
+  void element.offsetWidth;
+  element.classList.add("feedback");
+}
+
+function setButtonLabel(button, icon, text) {
+  button.textContent = "";
+  const iconElement = document.createElement("span");
+  iconElement.className = "icon";
+  iconElement.setAttribute("aria-hidden", "true");
+  if (icon === "copy") {
+    iconElement.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg>
+    `;
+  } else if (icon === "upload") {
+    iconElement.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3v12"></path>
+        <path d="m7 8 5-5 5 5"></path>
+        <path d="M5 21h14"></path>
+      </svg>
+    `;
+  } else {
+    iconElement.textContent = icon;
+  }
+  button.append(iconElement, document.createTextNode(text));
+}
+
+function syncEditActionState() {
+  const undo = document.getElementById("undo");
+  const redo = document.getElementById("redo");
+  const clear = document.getElementById("clear");
+  if (!undo || !redo || !clear) return;
+
+  undo.disabled = editor.operations.length === 0;
+  redo.disabled = editor.redoStack.length === 0;
+  clear.disabled = editor.operations.length === 0;
+}
+
+function clampZoom(value) {
+  return Math.min(4, Math.max(0.08, value));
+}
+
+function fitZoom() {
+  const stage = document.querySelector(".stage");
+  if (!stage || !editor.canvas) return 1;
+
+  const style = getComputedStyle(stage);
+  const horizontalPadding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+  const available = Math.max(120, stage.clientWidth - horizontalPadding);
+  return clampZoom(Math.min(1, available / editor.canvas.width));
+}
+
+function zoomLabel(value, mode = editor.zoomMode) {
+  if (mode === "fit") return "Fit";
+  return `${Math.round(value * 100)}%`;
+}
+
+function applyZoom(value, mode = "custom") {
+  if (!editor.canvas) return;
+
+  const next = clampZoom(value);
+  editor.zoom = next;
+  editor.zoomMode = mode;
+  editor.canvas.style.width = `${Math.round(editor.canvas.width * next)}px`;
+
+  const zoomValue = document.getElementById("zoomValue");
+  if (zoomValue) zoomValue.textContent = zoomLabel(next, mode);
+}
+
+function setupZoomControls() {
+  const controls = document.getElementById("zoomControls");
+  const zoomOut = document.getElementById("zoomOut");
+  const zoomIn = document.getElementById("zoomIn");
+  const zoomFit = document.getElementById("zoomFit");
+  const zoomActual = document.getElementById("zoomActual");
+  if (!controls || !zoomOut || !zoomIn || !zoomFit || !zoomActual) return;
+
+  controls.hidden = false;
+  zoomOut.addEventListener("click", () => applyZoom(editor.zoom / 1.2));
+  zoomIn.addEventListener("click", () => applyZoom(editor.zoom * 1.2));
+  zoomFit.addEventListener("click", () => applyZoom(fitZoom(), "fit"));
+  zoomActual.addEventListener("click", () => applyZoom(1, "actual"));
+  window.addEventListener("resize", () => {
+    if (editor.zoomMode === "fit") applyZoom(fitZoom(), "fit");
+  });
+
+  requestAnimationFrame(() => applyZoom(fitZoom(), "fit"));
+}
+
 function renderFinalCanvas() {
   const canvas = document.createElement("canvas");
   canvas.width = editor.baseCanvas.width;
@@ -856,6 +953,7 @@ function setupDownloadActions(baseName) {
       await refreshExports(baseName);
       anchor.click();
     });
+    anchor.addEventListener("click", () => pulseFeedback(anchor));
   }
 }
 
@@ -868,11 +966,13 @@ function setupAnnotationControls(baseName) {
   const strokeValue = document.getElementById("strokeValue");
   const textSize = document.getElementById("textSize");
   const textSizeValue = document.getElementById("textSizeValue");
+  editor.canvas.dataset.currentTool = editor.currentTool;
 
   toolButtons.forEach((button) => {
     button.addEventListener("click", () => {
       if (editor.activeTextInput) editor.activeTextInput.finish(true);
       editor.currentTool = button.dataset.tool;
+      editor.canvas.dataset.currentTool = editor.currentTool;
       toolButtons.forEach((item) => item.classList.toggle("active", item === button));
       toolHint.textContent = toolHints[editor.currentTool];
       renderStylePreview();
@@ -951,6 +1051,7 @@ function setupAnnotationControls(baseName) {
     if (operation) editor.redoStack.push(operation);
     editor.selectedIndex = editor.operations.length - 1;
     redraw();
+    syncEditActionState();
     scheduleExportRefresh(baseName);
   });
 
@@ -961,15 +1062,19 @@ function setupAnnotationControls(baseName) {
     editor.operations.push(operation);
     editor.selectedIndex = editor.operations.length - 1;
     redraw();
+    syncEditActionState();
     scheduleExportRefresh(baseName);
   });
 
   document.getElementById("clear").addEventListener("click", () => {
+    if (editor.operations.length === 0) return;
+    if (!confirm("Clear all annotations from this screenshot?")) return;
     if (editor.activeTextInput) editor.activeTextInput.finish(false);
     editor.operations = [];
     editor.redoStack = [];
     editor.selectedIndex = -1;
     redraw();
+    syncEditActionState();
     scheduleExportRefresh(baseName);
   });
 
@@ -1098,6 +1203,7 @@ function setupAnnotationControls(baseName) {
     editor.interaction = null;
     editor.redoStack = [];
     redraw();
+    syncEditActionState();
     scheduleExportRefresh(baseName);
   });
 
@@ -1109,6 +1215,7 @@ function setupAnnotationControls(baseName) {
   });
 
   renderStylePreview();
+  syncEditActionState();
 }
 
 async function setupCopyButton() {
@@ -1121,14 +1228,17 @@ async function setupCopyButton() {
       await navigator.clipboard.write([
         new ClipboardItem({ [pngBlob.type]: pngBlob }),
       ]);
-      copy.textContent = "Copied";
+      setButtonLabel(copy, "copy", "Copied");
+      pulseFeedback(copy);
     } catch (err) {
       console.error("Copy failed:", err);
-      copy.textContent = "Copy failed";
+      setButtonLabel(copy, "copy", "Copy failed");
+      pulseFeedback(copy);
     } finally {
       setTimeout(() => {
         copy.disabled = false;
-        copy.textContent = "Copy";
+        copy.classList.remove("feedback");
+        setButtonLabel(copy, "copy", "Copy");
       }, 1500);
     }
   });
@@ -1141,7 +1251,7 @@ async function setupUploadButton() {
     upload.disabled = true;
     upload.classList.remove("danger");
     upload.classList.add("success");
-    upload.textContent = "Uploading...";
+    setButtonLabel(upload, "upload", "Uploading...");
 
     try {
       if (editor.activeTextInput) editor.activeTextInput.finish(true);
@@ -1179,7 +1289,9 @@ async function setupUploadButton() {
       }
 
       await navigator.clipboard.writeText(url);
-      upload.textContent = "URL copied";
+      await saveUploadToHistory(url);
+      setButtonLabel(upload, "upload", "URL copied");
+      pulseFeedback(upload);
     } catch (err) {
       if (err.name === "AbortError") {
         err = new Error("Upload timed out. Uguu may be slow or unavailable.");
@@ -1187,13 +1299,15 @@ async function setupUploadButton() {
       console.error("Upload failed:", err);
       upload.classList.remove("success");
       upload.classList.add("danger");
-      upload.textContent = "Upload failed";
+      setButtonLabel(upload, "upload", "Upload failed");
+      pulseFeedback(upload);
     } finally {
       setTimeout(() => {
         upload.disabled = false;
+        upload.classList.remove("feedback");
         upload.classList.remove("danger");
         upload.classList.add("success");
-        upload.textContent = defaultLabel;
+        setButtonLabel(upload, "upload", defaultLabel);
       }, 1800);
     }
   });
@@ -1214,6 +1328,7 @@ async function autoSaveHistory(capture) {
     baseName: editor.baseName,
     dataUrl: outputCanvas.toDataURL("image/png"),
     height: outputCanvas.height,
+    mode: capture.mode || "fullPage",
     savedAt: Date.now(),
     title: capture.pageTitle || "Screenshot",
     url: capture.pageUrl || "",
@@ -1225,10 +1340,27 @@ async function autoSaveHistory(capture) {
   });
 }
 
+async function saveUploadToHistory(url) {
+  const { history = [] } = await chrome.storage.local.get("history");
+  const uploadedAt = Date.now();
+  const uploadExpiresAt = uploadedAt + 3 * 60 * 60 * 1000;
+  const index = history.findIndex((entry) => entry.baseName === editor.baseName);
+  if (index < 0) return;
+
+  history[index] = {
+    ...history[index],
+    uploadedAt,
+    uploadExpiresAt,
+    uploadUrl: url,
+  };
+  await chrome.storage.local.set({ history });
+}
+
 async function main() {
   const status = document.getElementById("status");
   const { capture } = await chrome.storage.local.get("capture");
   if (!capture) {
+    status.classList.remove("loading");
     status.textContent =
       "No capture found. Click the extension button on a page first.";
     return;
@@ -1238,7 +1370,9 @@ async function main() {
   document.getElementById("title").textContent = pageTitle || "Screenshot";
   document.title = `Screenshot - ${pageTitle || ""}`;
 
+  status.textContent = "Loading captured frames";
   const images = await Promise.all(frames.map((f) => loadImage(f.dataUrl)));
+  status.textContent = "Stitching screenshot";
   editor.baseCanvas = drawCapture(capture, images);
   editor.canvas = document.getElementById("editorCanvas");
   editor.ctx = editor.canvas.getContext("2d");
@@ -1252,16 +1386,21 @@ async function main() {
 
   const baseName = buildBaseName(capture);
   editor.baseName = baseName;
+  status.textContent = "Preparing downloads";
   await refreshExports(baseName);
   setupDownloadActions(baseName);
   await setupCopyButton();
   await setupUploadButton();
+  status.textContent = "Saving to history";
   await autoSaveHistory(capture);
+  status.textContent = "Preparing editor";
   setupAnnotationControls(baseName);
 
   document.getElementById("canvasShell").hidden = false;
   document.getElementById("annotationPanel").hidden = false;
   document.getElementById("actions").hidden = false;
+  setupZoomControls();
+  status.classList.remove("loading");
   status.hidden = true;
 
   // The frames are large; drop them now that the image is rendered.
@@ -1269,5 +1408,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  document.getElementById("status").textContent = `Failed to stitch: ${err}`;
+  const status = document.getElementById("status");
+  status.classList.remove("loading");
+  status.textContent = `Failed to stitch: ${err}`;
 });

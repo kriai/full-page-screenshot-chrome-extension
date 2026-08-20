@@ -2,7 +2,13 @@ const status = document.getElementById("status");
 const buttons = Array.from(document.querySelectorAll("button[data-mode]"));
 
 async function startCapture(mode) {
-  status.textContent = mode === "selection" ? "Drag an area on the page." : "Capturing...";
+  const labels = {
+    fullPage: "Starting full-page capture",
+    visible: "Starting visible-area capture",
+    selection: "Open page and drag an area",
+  };
+  status.textContent = labels[mode] || "Starting capture";
+  status.classList.add("loading");
   buttons.forEach((button) => {
     button.disabled = true;
   });
@@ -19,6 +25,7 @@ async function startCapture(mode) {
 
   if (!response || !response.ok) {
     status.textContent = response?.error || "Capture failed.";
+    status.classList.remove("loading");
     buttons.forEach((button) => {
       button.disabled = false;
     });
@@ -33,6 +40,9 @@ buttons.forEach((button) => {
 });
 
 document.getElementById("history").addEventListener("click", async () => {
-  await chrome.tabs.create({ url: chrome.runtime.getURL("history.html") });
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const options = { url: chrome.runtime.getURL("history.html") };
+  if (tab?.id) options.openerTabId = tab.id;
+  await chrome.tabs.create(options);
   window.close();
 });
