@@ -4,59 +4,777 @@
   <meta charset="utf-8" />
   <title>Full Page Screenshot</title>
   <style>
+    * { box-sizing: border-box; }
+    :root {
+      --bg: #111318;
+      --surface: #171a21;
+      --panel: #1d222b;
+      --panel-2: #252b36;
+      --line: #343b49;
+      --line-strong: #465064;
+      --text: #f4f7fb;
+      --muted: #9da8b8;
+      --muted-2: #758195;
+      --accent: #6c8cff;
+      --accent-strong: #89a3ff;
+      --green: #43d1a6;
+      --danger: #ff5f68;
+      --shadow: 0 22px 70px rgba(0, 0, 0, 0.38);
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+      --ease-snap: cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
     body {
       margin: 0;
-      background: #1e1e22;
-      color: #eee;
+      min-width: 320px;
+      background:
+        linear-gradient(180deg, #151820 0, var(--bg) 220px),
+        var(--bg);
+      color: var(--text);
       font-family: system-ui, sans-serif;
+      animation: pageIn 220ms var(--ease-out) both;
     }
     header {
       position: sticky;
       top: 0;
+      z-index: 10;
       display: flex;
       align-items: center;
-      gap: 16px;
-      padding: 10px 16px;
-      background: #2a2a30;
-      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+      gap: 14px;
+      min-height: 60px;
+      padding: 10px 18px;
+      background: rgba(17, 19, 24, 0.94);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(14px);
+      animation: slideDown 240ms var(--ease-out) both;
     }
     header h1 {
-      font-size: 14px;
-      font-weight: 600;
-      margin: 0;
       flex: 1;
+      min-width: 0;
+      margin: 0;
       overflow: hidden;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 750;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    #dimensions { font-size: 12px; color: #aaa; }
-    #download {
-      background: #4f7cff;
-      color: #fff;
-      text-decoration: none;
+    #dimensions {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .zoom-controls {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--panel-2);
+    }
+    .zoom-controls[hidden],
+    .actions[hidden] {
+      display: none;
+    }
+    .zoom-button,
+    .zoom-value {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 34px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
       font-size: 13px;
-      padding: 6px 14px;
-      border-radius: 6px;
+      line-height: 1;
     }
-    main { display: flex; justify-content: center; padding: 24px; }
-    #result {
-      max-width: 100%;
+    .zoom-button {
+      min-width: 34px;
+      cursor: pointer;
+      padding: 0 9px;
+      transition:
+        background-color 160ms ease,
+        filter 160ms ease,
+        transform 160ms var(--ease-snap);
+    }
+    .zoom-button:hover {
+      background: #26304b;
+      filter: brightness(1.08);
+    }
+    .zoom-button:active {
+      transform: scale(0.96);
+    }
+    .zoom-button:focus-visible {
+      outline: 2px solid var(--accent-strong);
+      outline-offset: -2px;
+    }
+    .zoom-button + .zoom-button,
+    .zoom-value + .zoom-button,
+    .zoom-button + .zoom-value {
+      border-left: 1px solid var(--line-strong);
+    }
+    .zoom-value {
+      min-width: 58px;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 0 9px;
+      user-select: none;
+    }
+    .actions {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .export-group {
+      display: inline-flex;
+      align-items: center;
+    }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 34px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      line-height: 1;
+      padding: 0 13px;
+      text-decoration: none;
+      white-space: nowrap;
+      transform: translateY(0) scale(1);
+      transition:
+        background-color 160ms ease,
+        border-color 160ms ease,
+        box-shadow 160ms ease,
+        filter 160ms ease,
+        opacity 160ms ease,
+        transform 160ms var(--ease-snap);
+    }
+    .button.secondary {
+      background: var(--panel-2);
+      border-color: var(--line-strong);
+      color: var(--text);
+    }
+    .button.success {
+      background: #1f6b52;
+      border-color: var(--green);
+    }
+    .button.danger {
+      background: #6b2630;
+      border-color: var(--danger);
+    }
+    .button:hover {
+      filter: brightness(1.08);
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.24);
+      transform: translateY(-1px);
+    }
+    .button:active {
+      transform: translateY(0) scale(0.985);
+    }
+    .button:focus-visible {
+      outline: 2px solid var(--accent-strong);
+      outline-offset: 2px;
+    }
+    .button:disabled {
+      cursor: default;
+      opacity: 0.6;
+      transform: none;
+    }
+    .button:disabled:hover {
+      border-color: var(--line-strong);
+      box-shadow: none;
+      filter: none;
+      transform: none;
+    }
+    .button.feedback {
+      animation: buttonPop 260ms var(--ease-out) both;
+    }
+    .icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 1em;
+      margin-right: 7px;
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .icon svg {
+      display: block;
+      width: 14px;
+      height: 14px;
+      stroke: currentColor;
+    }
+    .export-group .button {
+      border-color: var(--line-strong);
+      border-radius: 0;
+      min-width: 48px;
+      padding: 0 11px;
+    }
+    .export-group .button + .button {
+      border-left: 0;
+    }
+    .export-group .button:first-child {
+      border-bottom-left-radius: 8px;
+      border-top-left-radius: 8px;
+    }
+    .export-group .button:last-child {
+      border-bottom-right-radius: 8px;
+      border-top-right-radius: 8px;
+    }
+    .export-group .button:hover {
+      position: relative;
+      z-index: 1;
+    }
+    .workspace {
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr);
+      min-height: calc(100vh - 60px);
+    }
+    .panel {
+      position: sticky;
+      top: 60px;
+      align-self: start;
+      height: calc(100vh - 60px);
+      overflow: auto;
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+      padding: 16px 14px;
+      animation: panelIn 280ms var(--ease-out) both;
+    }
+    .panel h2 {
+      margin: 0 0 14px;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 800;
+    }
+    .section {
+      padding: 14px 0;
+      border-top: 1px solid var(--line);
+    }
+    .section:first-of-type {
+      border-top: 0;
+      padding-top: 0;
+    }
+    .label {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .tool-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .tool {
+      grid-column: span 3;
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      transform: translateY(0) scale(1);
+      transition:
+        background-color 160ms ease,
+        border-color 160ms ease,
+        box-shadow 160ms ease,
+        transform 160ms var(--ease-snap);
+    }
+    .tool:hover,
+    .tool.active {
+      border-color: var(--accent-strong);
+      background: #26304b;
+      box-shadow: inset 0 0 0 1px rgba(137, 163, 255, 0.18);
+    }
+    .tool:hover {
+      transform: translateY(-1px);
+    }
+    .tool:active {
+      transform: translateY(0) scale(0.985);
+    }
+    .tool.active {
+      animation: selectedPulse 280ms var(--ease-out) both;
+      box-shadow:
+        inset 0 0 0 1px rgba(137, 163, 255, 0.22),
+        0 0 0 3px rgba(108, 140, 255, 0.1);
+    }
+    .tool:focus-visible {
+      outline: 2px solid var(--accent-strong);
+      outline-offset: 2px;
+    }
+    .tool.compact { grid-column: span 2; }
+    .control {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 10px;
+      margin-top: 12px;
+      color: #dce3ef;
+      font-size: 13px;
+    }
+    input[type="color"] {
+      width: 42px;
+      height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 2px;
+      transition:
+        border-color 160ms ease,
+        box-shadow 160ms ease,
+        transform 160ms var(--ease-snap);
+    }
+    input[type="color"]:focus {
+      border-color: var(--accent-strong);
+      box-shadow: 0 0 0 3px rgba(108, 140, 255, 0.14);
+      outline: none;
+    }
+    input[type="range"] {
+      grid-column: 1 / -1;
+      width: 100%;
+      accent-color: var(--accent);
+      transition: filter 160ms ease;
+    }
+    input[type="range"]:hover { filter: brightness(1.12); }
+    .color-swatches {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .swatch {
+      width: 100%;
+      aspect-ratio: 1;
+      border: 2px solid rgba(255, 255, 255, 0.14);
+      border-radius: 8px;
+      cursor: pointer;
+      padding: 0;
+      transform: translateY(0) scale(1);
+      transition:
+        border-color 160ms ease,
+        box-shadow 160ms ease,
+        transform 160ms var(--ease-snap);
+    }
+    .swatch.active {
+      border-color: #fff;
+      box-shadow: 0 0 0 2px var(--accent);
+      animation: selectedPulse 260ms var(--ease-out) both;
+    }
+    .swatch:hover {
+      transform: translateY(-1px);
+    }
+    .swatch:active {
+      transform: translateY(0) scale(0.94);
+    }
+    .swatch:focus-visible {
+      outline: 2px solid var(--accent-strong);
+      outline-offset: 2px;
+    }
+    .value {
+      min-width: 34px;
+      color: var(--muted);
+      text-align: right;
+    }
+    .panel-actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+      gap: 8px;
+    }
+    .preview-box {
+      display: grid;
+      place-items: center;
+      min-height: 116px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background:
+        linear-gradient(45deg, #252936 25%, transparent 25%),
+        linear-gradient(-45deg, #252936 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #252936 75%),
+        linear-gradient(-45deg, transparent 75%, #252936 75%);
+      background-color: #171b23;
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+      background-size: 16px 16px;
+      transition:
+        border-color 180ms ease,
+        box-shadow 180ms ease;
+    }
+    .preview-box:hover {
+      border-color: var(--line-strong);
+      box-shadow: inset 0 0 0 1px rgba(137, 163, 255, 0.08);
+    }
+    #stylePreview {
+      width: 230px;
+      height: 92px;
+      transition: transform 180ms var(--ease-snap);
+    }
+    .preview-box:hover #stylePreview { transform: scale(1.015); }
+    .stage {
+      min-width: 0;
+      overflow: auto;
+      padding: 28px;
+    }
+    .canvas-shell {
+      display: inline-block;
+      min-width: 0;
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #090b0f;
+      box-shadow: var(--shadow);
+      animation: canvasIn 320ms var(--ease-out) both;
+      transition:
+        border-color 180ms ease,
+        box-shadow 180ms ease,
+        transform 180ms var(--ease-snap);
+    }
+    .canvas-shell:hover {
+      border-color: var(--line-strong);
+      box-shadow: 0 26px 76px rgba(0, 0, 0, 0.42);
+    }
+    #editorCanvas {
+      display: block;
+      width: auto;
+      max-width: none;
       height: auto;
-      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+      border-radius: 7px;
+      cursor: crosshair;
+      touch-action: none;
     }
-    #status { padding: 40px; text-align: center; color: #aaa; }
+    #editorCanvas:active {
+      cursor: grabbing;
+    }
+    #editorCanvas[data-current-tool="text"] {
+      cursor: text;
+    }
+    #editorCanvas[data-current-tool="step"] {
+      cursor: pointer;
+    }
+    #editorCanvas[data-current-tool="pen"] {
+      cursor: crosshair;
+    }
+    #status {
+      padding: 44px;
+      color: var(--muted);
+      text-align: center;
+      animation: statusIn 260ms var(--ease-out) both;
+    }
+    #status.loading::after {
+      content: "...";
+      display: inline-block;
+      overflow: hidden;
+      width: 0;
+      text-align: left;
+      animation: dots 1100ms steps(4, end) infinite;
+      vertical-align: bottom;
+    }
+    .hint {
+      margin: 10px 0 0;
+      color: var(--muted-2);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .text-editor-wrap {
+      position: absolute;
+      z-index: 2;
+      min-width: 180px;
+      animation: textEditorIn 180ms var(--ease-out) both;
+    }
+    .text-editor {
+      min-width: 180px;
+      min-height: 42px;
+      border: 2px solid var(--accent-strong);
+      border-radius: 8px;
+      background: rgba(12, 14, 19, 0.94);
+      color: var(--text);
+      font-family: system-ui, sans-serif;
+      font-weight: 700;
+      line-height: 1.2;
+      outline: none;
+      padding: 6px 8px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      -webkit-font-smoothing: antialiased;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+      transition:
+        border-color 160ms ease,
+        box-shadow 160ms ease;
+    }
+    .text-editor:focus {
+      border-color: #a9bbff;
+      box-shadow:
+        0 12px 32px rgba(0, 0, 0, 0.35),
+        0 0 0 3px rgba(108, 140, 255, 0.16);
+    }
+    .text-editor:empty::before {
+      color: rgba(255, 255, 255, 0.55);
+      content: attr(data-placeholder);
+    }
+    .text-editor-actions {
+      display: flex;
+      gap: 6px;
+      justify-content: flex-end;
+      margin-top: 6px;
+    }
+    .text-editor-actions button {
+      min-height: 28px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--panel-2);
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+      padding: 0 9px;
+      transform: translateY(0) scale(1);
+      transition:
+        background-color 160ms ease,
+        border-color 160ms ease,
+        transform 160ms var(--ease-snap);
+    }
+    .text-editor-actions button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .text-editor-actions button:hover {
+      border-color: var(--accent-strong);
+      transform: translateY(-1px);
+    }
+    .text-editor-actions button:active {
+      transform: translateY(0) scale(0.985);
+    }
+    @keyframes pageIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes panelIn {
+      from { opacity: 0; transform: translateX(-10px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes canvasIn {
+      from { opacity: 0; transform: translateY(10px) scale(0.992); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes statusIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes textEditorIn {
+      from { opacity: 0; transform: translateY(3px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes selectedPulse {
+      0% { transform: scale(0.96); }
+      70% { transform: scale(1.025); }
+      100% { transform: scale(1); }
+    }
+    @keyframes buttonPop {
+      0% { transform: scale(0.98); }
+      70% { transform: scale(1.035); }
+      100% { transform: scale(1); }
+    }
+    @keyframes dots {
+      to { width: 1.2em; }
+    }
+    @media (max-width: 820px) {
+      header {
+        flex-wrap: wrap;
+        gap: 8px 12px;
+      }
+      header h1 {
+        flex-basis: 100%;
+      }
+      #dimensions {
+        flex: 1;
+      }
+      .zoom-controls {
+        order: 2;
+      }
+      .actions {
+        order: 3;
+        width: 100%;
+      }
+      .workspace {
+        display: block;
+      }
+      .panel {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid #303540;
+      }
+      .stage {
+        padding: 14px;
+      }
+      #editorCanvas {
+        max-width: none;
+      }
+    }
+    @media (max-width: 560px) {
+      header {
+        padding: 10px 12px;
+      }
+      .actions {
+        justify-content: stretch;
+      }
+      .actions > .button,
+      .zoom-controls,
+      .export-group {
+        flex: 1 1 100%;
+      }
+      .export-group .button {
+        flex: 1;
+      }
+      .zoom-button,
+      .zoom-value {
+        flex: 1;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 1ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 1ms !important;
+      }
+      .button:hover,
+      .zoom-button:active,
+      .tool:hover,
+      .swatch:hover,
+      .preview-box:hover #stylePreview,
+      .text-editor-actions button:hover {
+        transform: none;
+      }
+    }
   </style>
 </head>
 <body>
   <header>
     <h1 id="title">Full Page Screenshot</h1>
     <span id="dimensions"></span>
-    <a id="download" hidden>Download PNG</a>
+    <div class="zoom-controls" id="zoomControls" hidden aria-label="Zoom controls">
+      <button class="zoom-button" id="zoomOut" type="button" title="Zoom out" aria-label="Zoom out">-</button>
+      <span class="zoom-value" id="zoomValue">Fit</span>
+      <button class="zoom-button" id="zoomIn" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+      <button class="zoom-button" id="zoomFit" type="button" title="Fit to window" aria-label="Fit to window">Fit</button>
+      <button class="zoom-button" id="zoomActual" type="button" title="Actual size" aria-label="Actual size">1:1</button>
+    </div>
+    <div class="actions" id="actions" hidden>
+      <button class="button secondary" id="copy" type="button" title="Copy PNG to clipboard">
+        <span class="icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+        </span>Copy
+      </button>
+      <button class="button success" id="upload" type="button" title="Upload and copy URL">
+        <span class="icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3v12"></path>
+            <path d="m7 8 5-5 5 5"></path>
+            <path d="M5 21h14"></path>
+          </svg>
+        </span>Upload & copy URL
+      </button>
+      <div class="export-group" aria-label="Download formats">
+        <a class="button" id="downloadPng" title="Download PNG">PNG</a>
+        <a class="button" id="downloadJpeg" title="Download JPEG">JPEG</a>
+        <a class="button" id="downloadPdf" title="Download PDF">PDF</a>
+      </div>
+    </div>
   </header>
-  <main>
-    <div id="status">Stitching screenshot…</div>
-    <img id="result" hidden alt="Full page screenshot" />
-  </main>
+  <div class="workspace">
+    <aside class="panel" id="annotationPanel" hidden>
+      <h2>Annotate</h2>
+      <div class="section">
+        <span class="label">Tools</span>
+        <div class="tool-grid" id="toolGrid">
+          <button class="tool active" type="button" data-tool="arrow" title="Draw an arrow">Arrow</button>
+          <button class="tool" type="button" data-tool="rect" title="Draw a box">Box</button>
+          <button class="tool" type="button" data-tool="pen" title="Draw freehand">Pen</button>
+          <button class="tool" type="button" data-tool="text" title="Place text">Text</button>
+          <button class="tool compact" type="button" data-tool="step" title="Place numbered marker">Step</button>
+          <button class="tool compact" type="button" data-tool="pixelate" title="Pixelate an area">Pixelate</button>
+          <button class="tool compact" type="button" data-tool="redact" title="Cover an area">Redact</button>
+        </div>
+        <p class="hint" id="toolHint">Drag to draw an arrow.</p>
+      </div>
+      <div class="section">
+        <label class="label" for="color">Style</label>
+        <div class="color-swatches" id="colorSwatches">
+          <button class="swatch active" type="button" data-color="#ff3b30" style="background:#ff3b30" aria-label="Red"></button>
+          <button class="swatch" type="button" data-color="#ff9500" style="background:#ff9500" aria-label="Orange"></button>
+          <button class="swatch" type="button" data-color="#ffcc00" style="background:#ffcc00" aria-label="Yellow"></button>
+          <button class="swatch" type="button" data-color="#34c759" style="background:#34c759" aria-label="Green"></button>
+          <button class="swatch" type="button" data-color="#00c7be" style="background:#00c7be" aria-label="Teal"></button>
+          <button class="swatch" type="button" data-color="#007aff" style="background:#007aff" aria-label="Blue"></button>
+          <button class="swatch" type="button" data-color="#5856d6" style="background:#5856d6" aria-label="Indigo"></button>
+          <button class="swatch" type="button" data-color="#af52de" style="background:#af52de" aria-label="Purple"></button>
+          <button class="swatch" type="button" data-color="#ff2d55" style="background:#ff2d55" aria-label="Pink"></button>
+          <button class="swatch" type="button" data-color="#ffffff" style="background:#ffffff" aria-label="White"></button>
+          <button class="swatch" type="button" data-color="#8e8e93" style="background:#8e8e93" aria-label="Gray"></button>
+          <button class="swatch" type="button" data-color="#111111" style="background:#111111" aria-label="Black"></button>
+        </div>
+        <div class="control">
+          <span>Color</span>
+          <input id="color" type="color" value="#ff3b30" />
+        </div>
+        <div class="control">
+          <span>Stroke</span>
+          <span class="value" id="strokeValue">5</span>
+          <input id="stroke" type="range" min="2" max="18" value="5" />
+        </div>
+        <div class="control">
+          <span>Text</span>
+          <span class="value" id="textSizeValue">28</span>
+          <input id="textSize" type="range" min="14" max="72" value="28" />
+        </div>
+      </div>
+      <div class="section">
+        <div class="panel-actions">
+          <button class="button secondary" id="undo" type="button" title="Undo last annotation" disabled>
+            <span class="icon" aria-hidden="true">&lt;</span>Undo
+          </button>
+          <button class="button secondary" id="redo" type="button" title="Redo annotation" disabled>
+            <span class="icon" aria-hidden="true">&gt;</span>Redo
+          </button>
+          <button class="button secondary" id="clear" type="button" title="Clear all annotations" disabled>
+            <span class="icon" aria-hidden="true">x</span>Clear
+          </button>
+        </div>
+      </div>
+      <div class="section">
+        <span class="label">Preview</span>
+        <div class="preview-box">
+          <canvas id="stylePreview" width="230" height="92"></canvas>
+        </div>
+      </div>
+    </aside>
+    <main class="stage">
+      <div id="status" class="loading">Stitching screenshot...</div>
+      <div class="canvas-shell" id="canvasShell" hidden>
+        <canvas id="editorCanvas"></canvas>
+      </div>
+    </main>
+  </div>
   <script src="viewer.js"></script>
 </body>
 </html>
