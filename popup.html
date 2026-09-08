@@ -6,178 +6,176 @@
   <style>
     * { box-sizing: border-box; }
     :root {
-      --bg: #111318;
-      --panel: #1b1f27;
-      --panel-2: #232833;
-      --line: #343b49;
-      --text: #f4f7fb;
-      --muted: #9da8b8;
-      --accent: #6c8cff;
-      --accent-2: #43d1a6;
-      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-      --ease-snap: cubic-bezier(0.2, 0.8, 0.2, 1);
+      --panel: #121820;
+      --primary: #3869D9;
+      --primary-hover: #4274EA;
+      --shelf: #202A3A;
+      --shelf-hover: #263247;
+      --divider: #344154;
+      --shelf-divider: #435168;
+      --text: #FFFFFF;
+      --muted: #C4CEDD;
+      --focus: #8EA8F5;
+    }
+    html,
+    body {
+      margin: 0;
+      background: var(--panel);
     }
     body {
-      width: 264px;
-      margin: 0;
-      padding: 12px;
-      background: var(--bg);
+      position: relative;
+      width: 300px;
+      height: 244px;
+      padding: 16px;
+      border-radius: 8px;
       color: var(--text);
-      font-family: system-ui, sans-serif;
-      animation: popupIn 180ms var(--ease-out) both;
-    }
-    .popup-title {
-      margin: 0 0 10px;
-      padding: 0 2px 10px;
-      border-bottom: 1px solid var(--line);
-      font-size: 13px;
-      font-weight: 750;
-      letter-spacing: 0;
-      animation: riseIn 220ms var(--ease-out) both;
-    }
-    .capture-actions,
-    .utility-actions {
-      display: grid;
-      gap: 8px;
-    }
-    .capture-actions {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      padding-bottom: 10px;
-      border-bottom: 1px solid var(--line);
-    }
-    .utility-actions {
-      padding-top: 10px;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+      overflow: hidden;
     }
     button {
-      display: block;
-      width: 100%;
-      min-height: 76px;
       margin: 0;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--panel);
-      color: var(--text);
-      font: inherit;
-      font-size: 12px;
-      text-align: center;
-      padding: 9px 6px;
+      border: 0;
+      color: inherit;
       cursor: pointer;
-      transform: translateY(0) scale(1);
+      font: inherit;
+      padding: 0;
+      text-align: center;
       transition:
-        background-color 160ms ease,
-        border-color 160ms ease,
-        box-shadow 160ms ease,
-        filter 160ms ease,
-        opacity 160ms ease,
-        transform 160ms var(--ease-snap);
-      animation: riseIn 240ms var(--ease-out) both;
-    }
-    button:nth-of-type(1) { animation-delay: 25ms; }
-    button:nth-of-type(2) { animation-delay: 55ms; }
-    button:nth-of-type(3) { animation-delay: 85ms; }
-    button:nth-of-type(4) { animation-delay: 115ms; }
-    button:last-of-type { margin-bottom: 0; }
-    button:hover {
-      background: var(--panel-2);
-      border-color: var(--accent);
-      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
-      transform: translateY(-1px);
-    }
-    button:active {
-      transform: translateY(0) scale(0.985);
+        background-color 140ms ease,
+        color 140ms ease,
+        opacity 140ms ease;
     }
     button:focus-visible {
-      outline: 2px solid var(--accent);
+      outline: 2px solid var(--focus);
       outline-offset: 2px;
     }
     button:disabled {
       cursor: default;
       opacity: 0.65;
-      transform: none;
     }
-    button:disabled:hover {
-      background: var(--panel);
-      border-color: var(--line);
-      box-shadow: none;
-      transform: none;
+    .panel {
+      width: 268px;
     }
-    button.primary {
-      background: #243058;
-      border-color: #405bad;
+    .primary-action {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      width: 268px;
+      height: 80px;
+      border-radius: 8px;
+      background: var(--primary);
+      font-size: 17px;
+      font-weight: 600;
+      line-height: 1;
+      white-space: nowrap;
     }
-    button.primary:disabled:hover {
-      background: #243058;
-      border-color: #405bad;
+    .primary-action:hover {
+      background: var(--primary-hover);
     }
-    button.primary:hover {
-      box-shadow:
-        0 8px 24px rgba(0, 0, 0, 0.24),
-        0 0 0 3px rgba(108, 140, 255, 0.12);
+    .primary-action .icon {
+      width: 28px;
+      height: 28px;
+      flex: 0 0 auto;
     }
-    button .label {
+    .primary-action span:last-child {
+      min-width: 0;
+      flex: 0 1 auto;
+    }
+    .capture-shelf {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      width: 268px;
+      height: 66px;
+      margin-top: 14px;
+      overflow: hidden;
+      border-radius: 8px;
+      background: var(--shelf);
+    }
+    .capture-shelf::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      width: 1px;
+      background: var(--shelf-divider);
+      transform: translateX(-0.5px);
+    }
+    .shelf-action {
+      position: relative;
+      z-index: 1;
       display: flex;
       align-items: center;
       flex-direction: column;
-      gap: 8px;
-      font-weight: 700;
-      line-height: 1.15;
-      transition: transform 160ms var(--ease-snap);
-    }
-    .icon {
-      display: inline-flex;
-      align-items: center;
       justify-content: center;
-      width: 38px;
-      height: 34px;
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      border-radius: 6px;
-      background: rgba(255, 255, 255, 0.06);
-      color: #dce4ff;
+      gap: 6px;
+      width: 134px;
+      height: 66px;
+      background: transparent;
+      font-size: 14px;
+      font-weight: 600;
       line-height: 1;
     }
-    .icon svg {
+    .shelf-action:hover {
+      background: var(--shelf-hover);
+    }
+    .shelf-action .icon {
+      width: 24px;
+      height: 24px;
+      flex: 0 0 auto;
+    }
+    .section-divider {
+      width: 268px;
+      height: 1px;
+      margin-top: 14px;
+      background: var(--divider);
+    }
+    .history-row {
+      display: flex;
+      align-items: center;
+      width: 268px;
+      height: 37px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1;
+      text-align: left;
+    }
+    .history-row:hover {
+      color: var(--text);
+    }
+    .history-row .history-icon {
+      width: 20px;
+      height: 20px;
+      margin-right: 12px;
+      flex: 0 0 auto;
+    }
+    .history-row .chevron {
+      width: 16px;
+      height: 16px;
+      margin-left: auto;
+      flex: 0 0 auto;
+    }
+    svg {
       display: block;
-      width: 30px;
-      height: 30px;
+      width: 100%;
+      height: 100%;
       stroke: currentColor;
     }
-    button.primary .icon {
-      background: rgba(108, 140, 255, 0.14);
-      color: #f4f7fb;
-    }
-    button:hover .label { transform: translateY(-1px); }
-    button .sub {
-      display: none;
-    }
-    #history {
-      min-height: 56px;
-      background: #18251f;
-      border-color: #285645;
-    }
-    #history .label {
-      flex-direction: row;
-      justify-content: center;
-      font-size: 13px;
-    }
-    #history .icon {
-      width: 34px;
-      height: 30px;
-    }
-    #history .icon svg {
-      width: 22px;
-      height: 22px;
-    }
-    #history:hover { border-color: var(--accent-2); }
     #status {
-      min-height: 0;
+      position: absolute;
+      right: 16px;
+      bottom: 4px;
+      left: 16px;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 10px;
+      line-height: 1.2;
+      text-align: center;
     }
     #status:empty { display: none; }
-    #status:not(:empty) {
-      margin-top: 8px;
-      animation: statusIn 180ms var(--ease-out) both;
-    }
     #status.loading::after {
       content: "...";
       display: inline-block;
@@ -187,94 +185,82 @@
       animation: dots 1100ms steps(4, end) infinite;
       vertical-align: bottom;
     }
-    @keyframes popupIn {
-      from { opacity: 0; transform: scale(0.985); }
-      to { opacity: 1; transform: scale(1); }
-    }
-    @keyframes riseIn {
-      from { opacity: 0; transform: translateY(5px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-    @keyframes statusIn {
-      from { opacity: 0; transform: translateY(-2px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
     @keyframes dots {
       to { width: 1.2em; }
     }
     @media (prefers-reduced-motion: reduce) {
       *,
+      *::before,
       *::after {
         animation-duration: 1ms !important;
         animation-iteration-count: 1 !important;
         scroll-behavior: auto !important;
         transition-duration: 1ms !important;
       }
-      button:hover .label,
-      button:hover {
-        transform: none;
-      }
     }
   </style>
 </head>
 <body>
-  <h1 class="popup-title">Full Page Screenshot</h1>
-  <div class="capture-actions" aria-label="Capture actions">
-    <button class="primary" data-mode="fullPage" title="Capture and stitch the full page">
-      <span class="label">
+  <main class="panel" aria-label="Screenshot actions">
+    <button class="primary-action" data-mode="fullPage" title="Capture and stitch the full page">
+      <span class="icon" aria-hidden="true">
+        <svg viewBox="0 0 32 32" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 4.5h9.5L24 10v17.5H9V4.5Z"></path>
+          <path d="M18.5 4.5V10H24"></path>
+          <path d="M13 15.5h3"></path>
+          <path d="M19 15.5h1.5v3"></path>
+          <path d="M20.5 22v1.5H17"></path>
+          <path d="M13 23.5h-1.5V20"></path>
+          <path d="M11.5 17v-1.5H13"></path>
+        </svg>
+      </span>
+      <span>Full page screenshot</span>
+    </button>
+
+    <div class="capture-shelf">
+      <button class="shelf-action" data-mode="selection" title="Select a region to capture">
         <span class="icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="7" y="4" width="10" height="14" rx="1.5"></rect>
-            <path d="M10 7h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-8"></path>
-            <path d="M10 8h4"></path>
-            <path d="M10 12h4"></path>
-            <path d="M10 16h4"></path>
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 4H5.5A1.5 1.5 0 0 0 4 5.5V8"></path>
+            <path d="M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8"></path>
+            <path d="M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16"></path>
+            <path d="M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"></path>
           </svg>
-        </span>Full page
+        </span>
+        <span>Select area</span>
+      </button>
+      <button class="shelf-action" data-mode="visible" title="Capture the visible viewport">
+        <span class="icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3.5" y="6" width="17" height="13" rx="1.5"></rect>
+            <path d="M3.5 10h17"></path>
+            <path d="M7 8h.1"></path>
+            <path d="M10 8h.1"></path>
+            <path d="M13 8h.1"></path>
+          </svg>
+        </span>
+        <span>Visible area</span>
+      </button>
+    </div>
+
+    <div class="section-divider" aria-hidden="true"></div>
+
+    <button class="history-row" id="history" type="button" title="Open saved screenshots">
+      <span class="history-icon" aria-hidden="true">
+        <svg viewBox="0 0 20 20" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 10a7 7 0 1 0 2.1-5"></path>
+          <path d="M3 4v5h5"></path>
+          <path d="M10 6v4l2.5 1.5"></path>
+        </svg>
+      </span>
+      <span>History</span>
+      <span class="chevron" aria-hidden="true">
+        <svg viewBox="0 0 16 16" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 3.5 4.5 4.5L6 12.5"></path>
+        </svg>
       </span>
     </button>
-    <button data-mode="visible" title="Capture the visible viewport">
-      <span class="label">
-        <span class="icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="4" y="7" width="16" height="10" rx="1.5"></rect>
-            <path d="M7 10h10"></path>
-            <path d="M7 14h6"></path>
-          </svg>
-        </span>Visible area
-      </span>
-    </button>
-    <button data-mode="selection" title="Select a region to capture">
-      <span class="label">
-        <span class="icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M6 3v4"></path>
-            <path d="M3 6h4"></path>
-            <path d="M18 3v4"></path>
-            <path d="M17 6h4"></path>
-            <path d="M6 17v4"></path>
-            <path d="M3 18h4"></path>
-            <path d="M18 17v4"></path>
-            <path d="M17 18h4"></path>
-            <rect x="7" y="7" width="10" height="10" rx="1.5" stroke-dasharray="3 2"></rect>
-          </svg>
-        </span>Select area
-      </span>
-    </button>
-  </div>
-  <div class="utility-actions" aria-label="Utilities">
-    <button id="history" type="button" title="Open saved screenshots">
-      <span class="label">
-        <span class="icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 12a9 9 0 1 0 3-6.7"></path>
-            <path d="M3 4v5h5"></path>
-            <path d="M12 7v5l3 2"></path>
-          </svg>
-        </span>History
-      </span>
-    </button>
-  </div>
+  </main>
   <div id="status"></div>
   <script src="popup.js"></script>
 </body>

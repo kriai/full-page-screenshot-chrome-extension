@@ -10,16 +10,20 @@
       --surface: #171a21;
       --panel: #1d222b;
       --panel-2: #252b36;
-      --line: #343b49;
-      --line-strong: #465064;
+      --line: #2b313d;
+      --line-strong: #3c4658;
       --text: #f4f7fb;
       --muted: #9da8b8;
       --muted-2: #758195;
-      --accent: #6c8cff;
-      --accent-strong: #89a3ff;
+      --accent: #6f86c9;
+      --accent-strong: #9fb2ff;
       --green: #43d1a6;
       --danger: #ff5f68;
-      --shadow: 0 22px 70px rgba(0, 0, 0, 0.38);
+      --control-height: 36px;
+      --focus-ring: #9fb2ff;
+      --selected-bg: rgba(111, 134, 201, 0.16);
+      --selected-border: rgba(159, 178, 255, 0.58);
+      --shadow: 0 18px 48px rgba(0, 0, 0, 0.36);
       --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
       --ease-snap: cubic-bezier(0.2, 0.8, 0.2, 1);
     }
@@ -27,11 +31,11 @@
       margin: 0;
       min-width: 320px;
       background:
-        linear-gradient(180deg, #151820 0, var(--bg) 220px),
-        var(--bg);
+        linear-gradient(180deg, #12161d 0, #0d1016 220px),
+        #0d1016;
       color: var(--text);
       font-family: system-ui, sans-serif;
-      animation: pageIn 220ms var(--ease-out) both;
+      animation: pageIn 160ms var(--ease-out) both;
     }
     header {
       position: sticky;
@@ -42,10 +46,10 @@
       gap: 14px;
       min-height: 60px;
       padding: 10px 18px;
-      background: rgba(17, 19, 24, 0.94);
+      background: rgba(18, 22, 29, 0.96);
       border-bottom: 1px solid var(--line);
       backdrop-filter: blur(14px);
-      animation: slideDown 240ms var(--ease-out) both;
+      animation: slideDown 160ms var(--ease-out) both;
     }
     header h1 {
       flex: 1;
@@ -61,15 +65,17 @@
     #dimensions {
       color: var(--muted);
       font-size: 12px;
+      font-variant-numeric: tabular-nums;
       white-space: nowrap;
     }
     .zoom-controls {
       display: inline-flex;
       align-items: center;
+      flex: 0 0 auto;
       border: 1px solid var(--line-strong);
-      border-radius: 8px;
+      border-radius: 6px;
       overflow: hidden;
-      background: var(--panel-2);
+      background: #202633;
     }
     .zoom-controls[hidden],
     .actions[hidden] {
@@ -80,7 +86,7 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-height: 34px;
+      min-height: var(--control-height);
       border: 0;
       border-radius: 0;
       background: transparent;
@@ -90,23 +96,23 @@
       line-height: 1;
     }
     .zoom-button {
-      min-width: 34px;
+      min-width: var(--control-height);
       cursor: pointer;
       padding: 0 9px;
       transition:
         background-color 160ms ease,
-        filter 160ms ease,
-        transform 160ms var(--ease-snap);
+        filter 140ms ease,
+        transform 140ms var(--ease-snap);
     }
     .zoom-button:hover {
-      background: #26304b;
-      filter: brightness(1.08);
+      background: #263044;
+      filter: brightness(1.04);
     }
     .zoom-button:active {
-      transform: scale(0.96);
+      transform: none;
     }
     .zoom-button:focus-visible {
-      outline: 2px solid var(--accent-strong);
+      outline: 2px solid var(--focus-ring);
       outline-offset: -2px;
     }
     .zoom-button + .zoom-button,
@@ -132,13 +138,39 @@
       display: inline-flex;
       align-items: center;
     }
+    .export-status {
+      min-width: 74px;
+      border: 1px solid rgba(108, 140, 255, 0.24);
+      border-radius: 999px;
+      background: rgba(108, 140, 255, 0.1);
+      color: #cdd7ff;
+      font-size: 12px;
+      font-weight: 750;
+      line-height: 1;
+      padding: 6px 9px;
+      text-align: center;
+      transition:
+        border-color 160ms ease,
+        color 160ms ease,
+        opacity 160ms ease,
+        transform 160ms var(--ease-snap);
+    }
+    .export-status.done {
+      border-color: rgba(67, 209, 166, 0.28);
+      background: rgba(67, 209, 166, 0.1);
+      color: #bdf3df;
+      animation: buttonPop 160ms var(--ease-snap) both;
+    }
+    .export-status[hidden] {
+      display: none;
+    }
     .button {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-height: 34px;
+      min-height: var(--control-height);
       border: 1px solid transparent;
-      border-radius: 8px;
+      border-radius: 6px;
       background: var(--accent);
       color: #fff;
       cursor: pointer;
@@ -148,43 +180,44 @@
       padding: 0 13px;
       text-decoration: none;
       white-space: nowrap;
-      transform: translateY(0) scale(1);
+      transform: none;
       transition:
         background-color 160ms ease,
         border-color 160ms ease,
-        box-shadow 160ms ease,
-        filter 160ms ease,
-        opacity 160ms ease,
-        transform 160ms var(--ease-snap);
+        box-shadow 140ms ease,
+        filter 140ms ease,
+        opacity 140ms ease,
+        transform 140ms var(--ease-snap);
     }
     .button.secondary {
-      background: var(--panel-2);
+      background: #202633;
       border-color: var(--line-strong);
       color: var(--text);
     }
     .button.success {
-      background: #1f6b52;
-      border-color: var(--green);
+      background: #2f497e;
+      border-color: #5872ad;
     }
     .button.danger {
       background: #6b2630;
       border-color: var(--danger);
     }
     .button:hover {
-      filter: brightness(1.08);
-      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.24);
-      transform: translateY(-1px);
+      filter: brightness(1.04);
+      box-shadow: none;
+      transform: none;
     }
     .button:active {
-      transform: translateY(0) scale(0.985);
+      transform: none;
     }
     .button:focus-visible {
-      outline: 2px solid var(--accent-strong);
+      outline: 2px solid var(--focus-ring);
       outline-offset: 2px;
     }
     .button:disabled {
       cursor: default;
-      opacity: 0.6;
+      color: var(--muted);
+      opacity: 1;
       transform: none;
     }
     .button:disabled:hover {
@@ -194,7 +227,7 @@
       transform: none;
     }
     .button.feedback {
-      animation: buttonPop 260ms var(--ease-out) both;
+      animation: buttonPop 180ms var(--ease-out) both;
     }
     .icon {
       display: inline-flex;
@@ -208,11 +241,13 @@
     }
     .icon svg {
       display: block;
-      width: 14px;
-      height: 14px;
+      width: 16px;
+      height: 16px;
       stroke: currentColor;
     }
     .export-group .button {
+      background: #202633;
+      color: var(--text);
       border-color: var(--line-strong);
       border-radius: 0;
       min-width: 48px;
@@ -222,12 +257,12 @@
       border-left: 0;
     }
     .export-group .button:first-child {
-      border-bottom-left-radius: 8px;
-      border-top-left-radius: 8px;
+      border-bottom-left-radius: 6px;
+      border-top-left-radius: 6px;
     }
     .export-group .button:last-child {
-      border-bottom-right-radius: 8px;
-      border-top-right-radius: 8px;
+      border-bottom-right-radius: 6px;
+      border-top-right-radius: 6px;
     }
     .export-group .button:hover {
       position: relative;
@@ -235,7 +270,7 @@
     }
     .workspace {
       display: grid;
-      grid-template-columns: 320px minmax(0, 1fr);
+      grid-template-columns: 300px minmax(0, 1fr);
       min-height: calc(100vh - 60px);
     }
     .panel {
@@ -245,90 +280,128 @@
       height: calc(100vh - 60px);
       overflow: auto;
       border-right: 1px solid var(--line);
-      background: var(--panel);
-      padding: 16px 14px;
-      animation: panelIn 280ms var(--ease-out) both;
+      background: #171b22;
+      padding: 16px;
+      animation: panelIn 160ms var(--ease-out) both;
     }
     .panel h2 {
-      margin: 0 0 14px;
+      margin: 0 0 12px;
       color: var(--text);
       font-size: 14px;
       font-weight: 800;
     }
     .section {
-      padding: 14px 0;
+      padding: 16px 0;
       border-top: 1px solid var(--line);
     }
     .section:first-of-type {
       border-top: 0;
       padding-top: 0;
     }
-    .label {
-      display: block;
-      margin-bottom: 8px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 650;
+    .editor-state-controls {
+      display: none;
     }
     .tool-grid {
       display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 8px;
     }
+    .label {
+      display: block;
+      margin-bottom: 8px;
+      color: #c2cbd8;
+      font-size: 12px;
+      font-weight: 650;
+    }
     .tool {
-      grid-column: span 3;
-      min-height: 38px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--surface);
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      min-width: 32px;
+      min-height: 32px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
       color: var(--text);
       cursor: pointer;
       font: inherit;
-      font-size: 13px;
-      transform: translateY(0) scale(1);
+      line-height: 1;
+      padding: 0;
+      transform: none;
       transition:
-        background-color 160ms ease,
-        border-color 160ms ease,
-        box-shadow 160ms ease,
+        background-color 140ms ease,
+        border-color 140ms ease,
         transform 160ms var(--ease-snap);
     }
-    .tool:hover,
-    .tool.active {
-      border-color: var(--accent-strong);
-      background: #26304b;
-      box-shadow: inset 0 0 0 1px rgba(137, 163, 255, 0.18);
+    .tool-grid .tool {
+      width: 100%;
+      min-height: 40px;
+      background: rgba(255, 255, 255, 0.025);
+    }
+    .tool-grid .tool span {
+      display: inline;
+      margin-left: 7px;
+      font-size: 11.5px;
+      font-weight: 650;
+    }
+    .tool-grid .tool svg {
+      width: 16px;
+      height: 16px;
+    }
+    .tool svg {
+      width: 20px;
+      height: 20px;
+      stroke: currentColor;
+    }
+    .tool span {
+      display: none;
     }
     .tool:hover {
-      transform: translateY(-1px);
+      border-color: rgba(159, 178, 255, 0.32);
+      background: rgba(255, 255, 255, 0.055);
+      transform: none;
     }
     .tool:active {
-      transform: translateY(0) scale(0.985);
+      transform: none;
     }
     .tool.active {
-      animation: selectedPulse 280ms var(--ease-out) both;
-      box-shadow:
-        inset 0 0 0 1px rgba(137, 163, 255, 0.22),
-        0 0 0 3px rgba(108, 140, 255, 0.1);
+      border-color: var(--selected-border);
+      background: var(--selected-bg);
+      color: #f6f8ff;
     }
     .tool:focus-visible {
-      outline: 2px solid var(--accent-strong);
+      outline: 2px solid var(--focus-ring);
       outline-offset: 2px;
     }
-    .tool.compact { grid-column: span 2; }
+    .tool.feedback {
+      animation: buttonPop 160ms var(--ease-out) both;
+    }
     .control {
       display: grid;
       grid-template-columns: 1fr auto;
       align-items: center;
-      gap: 10px;
-      margin-top: 12px;
+      gap: 8px;
+      margin-top: 10px;
       color: #dce3ef;
       font-size: 13px;
     }
+    .style-control {
+      padding: 0;
+    }
+    .style-control[hidden],
+    .color-swatches[hidden] {
+      display: none;
+    }
+    .style-control + .style-control {
+      margin-top: 12px;
+    }
     input[type="color"] {
-      width: 42px;
-      height: 30px;
+      width: 38px;
+      height: 28px;
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 6px;
       background: var(--surface);
       padding: 2px;
       transition:
@@ -337,7 +410,7 @@
         transform 160ms var(--ease-snap);
     }
     input[type="color"]:focus {
-      border-color: var(--accent-strong);
+      border-color: var(--focus-ring);
       box-shadow: 0 0 0 3px rgba(108, 140, 255, 0.14);
       outline: none;
     }
@@ -348,82 +421,199 @@
       transition: filter 160ms ease;
     }
     input[type="range"]:hover { filter: brightness(1.12); }
+    input[type="range"]:focus-visible {
+      outline: 2px solid var(--focus-ring);
+      outline-offset: 3px;
+    }
+    select {
+      min-height: 30px;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+      font-size: 12px;
+      padding: 0 8px;
+    }
+    select:focus-visible {
+      outline: 2px solid var(--focus-ring);
+      outline-offset: 2px;
+    }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: #dce3ef;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    .toggle-row input[type="checkbox"] {
+      width: 22px;
+      height: 22px;
+      flex: 0 0 auto;
+      accent-color: var(--accent-strong);
+      cursor: pointer;
+    }
+    .layout-controls {
+      margin-top: 12px;
+    }
+    .layout-controls[hidden] {
+      display: none;
+    }
     .color-swatches {
       display: grid;
-      grid-template-columns: repeat(6, 1fr);
-      gap: 8px;
-      margin-bottom: 12px;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 6px;
+      margin-bottom: 10px;
     }
     .swatch {
       width: 100%;
       aspect-ratio: 1;
-      border: 2px solid rgba(255, 255, 255, 0.14);
-      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 5px;
       cursor: pointer;
       padding: 0;
-      transform: translateY(0) scale(1);
+      transform: none;
       transition:
         border-color 160ms ease,
         box-shadow 160ms ease,
         transform 160ms var(--ease-snap);
     }
     .swatch.active {
-      border-color: #fff;
-      box-shadow: 0 0 0 2px var(--accent);
-      animation: selectedPulse 260ms var(--ease-out) both;
+      border-color: var(--selected-border);
+      box-shadow: 0 0 0 1px var(--selected-border);
     }
     .swatch:hover {
-      transform: translateY(-1px);
+      transform: none;
     }
     .swatch:active {
-      transform: translateY(0) scale(0.94);
+      transform: none;
     }
     .swatch:focus-visible {
-      outline: 2px solid var(--accent-strong);
+      outline: 2px solid var(--focus-ring);
       outline-offset: 2px;
     }
     .value {
       min-width: 34px;
       color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      line-height: 1;
       text-align: right;
+      font-variant-numeric: tabular-nums;
     }
     .panel-actions {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
-      gap: 8px;
+      display: flex;
+      gap: 6px;
+    }
+    .panel-actions .button {
+      width: 34px;
+      min-height: 32px;
+      border-color: transparent;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.025);
+      padding: 0;
+    }
+    .panel-actions .icon {
+      margin-right: 0;
+      font-size: 15px;
+    }
+    .panel-actions .button span:not(.icon) {
+      display: none;
     }
     .preview-box {
-      display: grid;
-      place-items: center;
-      min-height: 116px;
+      display: flex;
+      align-items: center;
+      flex-direction: column;
+      justify-content: center;
+      gap: 8px;
       border: 1px solid var(--line);
       border-radius: 8px;
       background:
-        linear-gradient(45deg, #252936 25%, transparent 25%),
-        linear-gradient(-45deg, #252936 25%, transparent 25%),
-        linear-gradient(45deg, transparent 75%, #252936 75%),
-        linear-gradient(-45deg, transparent 75%, #252936 75%);
-      background-color: #171b23;
+        linear-gradient(45deg, rgba(255, 255, 255, 0.035) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(255, 255, 255, 0.035) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.035) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.035) 75%),
+        rgba(255, 255, 255, 0.018);
       background-position: 0 0, 0 8px, 8px -8px, -8px 0;
       background-size: 16px 16px;
-      transition:
-        border-color 180ms ease,
-        box-shadow 180ms ease;
+      padding: 8px;
     }
-    .preview-box:hover {
-      border-color: var(--line-strong);
-      box-shadow: inset 0 0 0 1px rgba(137, 163, 255, 0.08);
+    .preview-box .label {
+      align-self: flex-start;
+      margin: 0;
     }
     #stylePreview {
-      width: 230px;
-      height: 92px;
-      transition: transform 180ms var(--ease-snap);
+      align-self: center;
+      width: 132px;
+      height: 44px;
+      transition: none;
     }
-    .preview-box:hover #stylePreview { transform: scale(1.015); }
     .stage {
+      position: relative;
       min-width: 0;
       overflow: auto;
-      padding: 28px;
+      min-height: calc(100vh - 60px);
+      padding: 24px;
+    }
+    .mini-swatch::before {
+      content: "";
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: var(--preset-color);
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+    }
+    .mini-toolbar {
+      position: absolute;
+      z-index: 8;
+      display: none;
+      align-items: center;
+      gap: 5px;
+      border: 1px solid rgba(94, 105, 129, 0.9);
+      border-radius: 8px;
+      background: rgba(25, 29, 38, 0.94);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
+      padding: 5px;
+      transform: translate(-50%, -100%);
+      backdrop-filter: blur(14px);
+    }
+    .mini-toolbar.visible {
+      display: flex;
+    }
+    .mini-swatch,
+    .mini-action {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      padding: 0;
+    }
+    .mini-action svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+    }
+    .mini-swatch:hover,
+    .mini-action:hover {
+      border-color: rgba(230, 235, 245, 0.5);
+      background: rgba(255, 255, 255, 0.07);
+    }
+    .mini-swatch.active {
+      border-color: var(--selected-border);
+      background: var(--selected-bg);
+    }
+    .mini-swatch:focus-visible,
+    .mini-action:focus-visible {
+      outline: 2px solid var(--focus-ring);
+      outline-offset: 2px;
     }
     .canvas-shell {
       display: inline-block;
@@ -432,8 +622,10 @@
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #090b0f;
-      box-shadow: var(--shadow);
-      animation: canvasIn 320ms var(--ease-out) both;
+      box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.025),
+        var(--shadow);
+      animation: canvasIn 180ms var(--ease-out) both;
       transition:
         border-color 180ms ease,
         box-shadow 180ms ease,
@@ -441,14 +633,29 @@
     }
     .canvas-shell:hover {
       border-color: var(--line-strong);
-      box-shadow: 0 26px 76px rgba(0, 0, 0, 0.42);
+      box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.035),
+        0 20px 52px rgba(0, 0, 0, 0.38);
     }
+    .canvas-stack {
+      position: relative;
+      display: inline-block;
+      vertical-align: top;
+    }
+    #baseDisplayCanvas,
     #editorCanvas {
       display: block;
       width: auto;
       max-width: none;
       height: auto;
       border-radius: 7px;
+    }
+    #baseDisplayCanvas {
+      background: #fff;
+    }
+    #editorCanvas {
+      position: absolute;
+      inset: 0;
       cursor: crosshair;
       touch-action: none;
     }
@@ -468,7 +675,7 @@
       padding: 44px;
       color: var(--muted);
       text-align: center;
-      animation: statusIn 260ms var(--ease-out) both;
+      animation: statusIn 160ms var(--ease-out) both;
     }
     #status.loading::after {
       content: "...";
@@ -489,13 +696,13 @@
       position: absolute;
       z-index: 2;
       min-width: 180px;
-      animation: textEditorIn 180ms var(--ease-out) both;
+      animation: textEditorIn 140ms var(--ease-out) both;
     }
     .text-editor {
       min-width: 180px;
       min-height: 42px;
       border: 2px solid var(--accent-strong);
-      border-radius: 8px;
+      border-radius: 6px;
       background: rgba(12, 14, 19, 0.94);
       color: var(--text);
       font-family: system-ui, sans-serif;
@@ -512,7 +719,7 @@
         box-shadow 160ms ease;
     }
     .text-editor:focus {
-      border-color: #a9bbff;
+      border-color: var(--focus-ring);
       box-shadow:
         0 12px 32px rgba(0, 0, 0, 0.35),
         0 0 0 3px rgba(108, 140, 255, 0.16);
@@ -530,14 +737,14 @@
     .text-editor-actions button {
       min-height: 28px;
       border: 1px solid var(--line-strong);
-      border-radius: 8px;
+      border-radius: 6px;
       background: var(--panel-2);
       color: var(--text);
       cursor: pointer;
       font: inherit;
       font-size: 12px;
       padding: 0 9px;
-      transform: translateY(0) scale(1);
+      transform: none;
       transition:
         background-color 160ms ease,
         border-color 160ms ease,
@@ -548,11 +755,15 @@
       border-color: var(--accent);
     }
     .text-editor-actions button:hover {
-      border-color: var(--accent-strong);
-      transform: translateY(-1px);
+      border-color: var(--focus-ring);
+      transform: none;
+    }
+    .text-editor-actions button:focus-visible {
+      outline: 2px solid var(--focus-ring);
+      outline-offset: 2px;
     }
     .text-editor-actions button:active {
-      transform: translateY(0) scale(0.985);
+      transform: none;
     }
     @keyframes pageIn {
       from { opacity: 0; }
@@ -567,26 +778,24 @@
       to { opacity: 1; transform: translateX(0); }
     }
     @keyframes canvasIn {
-      from { opacity: 0; transform: translateY(10px) scale(0.992); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
     }
     @keyframes statusIn {
       from { opacity: 0; transform: translateY(4px); }
       to { opacity: 1; transform: translateY(0); }
     }
     @keyframes textEditorIn {
-      from { opacity: 0; transform: translateY(3px) scale(0.98); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
+      from { opacity: 0; transform: translateY(3px); }
+      to { opacity: 1; transform: translateY(0); }
     }
     @keyframes selectedPulse {
-      0% { transform: scale(0.96); }
-      70% { transform: scale(1.025); }
-      100% { transform: scale(1); }
+      0% { opacity: 0.88; }
+      100% { opacity: 1; }
     }
     @keyframes buttonPop {
-      0% { transform: scale(0.98); }
-      70% { transform: scale(1.035); }
-      100% { transform: scale(1); }
+      0% { filter: brightness(0.94); }
+      100% { filter: brightness(1); }
     }
     @keyframes dots {
       to { width: 1.2em; }
@@ -615,6 +824,7 @@
       .panel {
         position: static;
         height: auto;
+        overflow: visible;
         border-right: 0;
         border-bottom: 1px solid #303540;
       }
@@ -658,7 +868,6 @@
       .zoom-button:active,
       .tool:hover,
       .swatch:hover,
-      .preview-box:hover #stylePreview,
       .text-editor-actions button:hover {
         transform: none;
       }
@@ -666,10 +875,10 @@
   </style>
 </head>
 <body>
-  <header>
-    <h1 id="title">Full Page Screenshot</h1>
-    <span id="dimensions"></span>
-    <div class="zoom-controls" id="zoomControls" hidden aria-label="Zoom controls">
+    <header>
+      <h1 id="title">Full Page Screenshot</h1>
+      <span id="dimensions"></span>
+      <div class="zoom-controls" id="zoomControls" hidden aria-label="Zoom controls">
       <button class="zoom-button" id="zoomOut" type="button" title="Zoom out" aria-label="Zoom out">-</button>
       <span class="zoom-value" id="zoomValue">Fit</span>
       <button class="zoom-button" id="zoomIn" type="button" title="Zoom in" aria-label="Zoom in">+</button>
@@ -699,6 +908,7 @@
         <a class="button" id="downloadJpeg" title="Download JPEG">JPEG</a>
         <a class="button" id="downloadPdf" title="Download PDF">PDF</a>
       </div>
+      <span class="export-status" id="exportStatus" hidden aria-live="polite"></span>
     </div>
   </header>
   <div class="workspace">
@@ -706,72 +916,216 @@
       <h2>Annotate</h2>
       <div class="section">
         <span class="label">Tools</span>
-        <div class="tool-grid" id="toolGrid">
-          <button class="tool active" type="button" data-tool="arrow" title="Draw an arrow">Arrow</button>
-          <button class="tool" type="button" data-tool="rect" title="Draw a box">Box</button>
-          <button class="tool" type="button" data-tool="pen" title="Draw freehand">Pen</button>
-          <button class="tool" type="button" data-tool="text" title="Place text">Text</button>
-          <button class="tool compact" type="button" data-tool="step" title="Place numbered marker">Step</button>
-          <button class="tool compact" type="button" data-tool="pixelate" title="Pixelate an area">Pixelate</button>
-          <button class="tool compact" type="button" data-tool="redact" title="Cover an area">Redact</button>
+        <div class="tool-grid">
+          <button class="tool active" type="button" data-tool="arrow" title="Draw an arrow (A)" aria-label="Arrow">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M5 19 19 5"></path>
+              <path d="M9 5h10v10"></path>
+            </svg>
+            <span>Arrow</span>
+          </button>
+          <button class="tool" type="button" data-tool="rect" title="Draw a box (B)" aria-label="Box">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="5" y="5" width="14" height="14" rx="2"></rect>
+            </svg>
+            <span>Box</span>
+          </button>
+          <button class="tool" type="button" data-tool="crop" title="Crop screenshot (C)" aria-label="Crop">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M6 2v14a2 2 0 0 0 2 2h14"></path>
+              <path d="M18 22V8a2 2 0 0 0-2-2H2"></path>
+            </svg>
+            <span>Crop</span>
+          </button>
+          <button class="tool" type="button" data-tool="pen" title="Draw freehand (P)" aria-label="Pen">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 20c5-1 4-6 8-6 3 0 3 3 6 3 1 0 2-.3 3-1"></path>
+              <path d="M14 4l6 6"></path>
+            </svg>
+            <span>Pen</span>
+          </button>
+          <button class="tool" type="button" data-tool="text" title="Place text (T)" aria-label="Text">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M5 6h14"></path>
+              <path d="M12 6v12"></path>
+              <path d="M9 18h6"></path>
+            </svg>
+            <span>Text</span>
+          </button>
+          <button class="tool" type="button" data-tool="step" title="Place numbered marker (S)" aria-label="Step">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="8"></circle>
+              <path d="M12 8v8"></path>
+              <path d="M10 10l2-2 2 2"></path>
+            </svg>
+            <span>Step</span>
+          </button>
+          <button class="tool" type="button" data-tool="blur" title="Blur an area (U)" aria-label="Blur">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3c3 3 5 6 5 9a5 5 0 0 1-10 0c0-3 2-6 5-9Z"></path>
+              <path d="M8 16c2-1 6-1 8 0"></path>
+            </svg>
+            <span>Blur</span>
+          </button>
+          <button class="tool" type="button" data-tool="pixelate" title="Pixelate an area (X)" aria-label="Pixelate">
+            <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+              <rect x="5" y="5" width="7" height="7" rx="1"></rect>
+              <rect x="12" y="5" width="7" height="7" rx="1" opacity="0.42"></rect>
+              <rect x="5" y="12" width="7" height="7" rx="1" opacity="0.42"></rect>
+              <rect x="12" y="12" width="7" height="7" rx="1"></rect>
+            </svg>
+            <span>Pixelate</span>
+          </button>
+          <button class="tool" type="button" data-tool="redact" title="Cover an area (R)" aria-label="Redact">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="4" y="7" width="16" height="10" rx="1"></rect>
+              <path d="M6 10h12"></path>
+              <path d="M6 14h12"></path>
+            </svg>
+            <span>Redact</span>
+          </button>
         </div>
         <p class="hint" id="toolHint">Drag to draw an arrow.</p>
       </div>
       <div class="section">
         <label class="label" for="color">Style</label>
-        <div class="color-swatches" id="colorSwatches">
-          <button class="swatch active" type="button" data-color="#ff3b30" style="background:#ff3b30" aria-label="Red"></button>
-          <button class="swatch" type="button" data-color="#ff9500" style="background:#ff9500" aria-label="Orange"></button>
-          <button class="swatch" type="button" data-color="#ffcc00" style="background:#ffcc00" aria-label="Yellow"></button>
-          <button class="swatch" type="button" data-color="#34c759" style="background:#34c759" aria-label="Green"></button>
-          <button class="swatch" type="button" data-color="#00c7be" style="background:#00c7be" aria-label="Teal"></button>
-          <button class="swatch" type="button" data-color="#007aff" style="background:#007aff" aria-label="Blue"></button>
-          <button class="swatch" type="button" data-color="#5856d6" style="background:#5856d6" aria-label="Indigo"></button>
-          <button class="swatch" type="button" data-color="#af52de" style="background:#af52de" aria-label="Purple"></button>
-          <button class="swatch" type="button" data-color="#ff2d55" style="background:#ff2d55" aria-label="Pink"></button>
-          <button class="swatch" type="button" data-color="#ffffff" style="background:#ffffff" aria-label="White"></button>
-          <button class="swatch" type="button" data-color="#8e8e93" style="background:#8e8e93" aria-label="Gray"></button>
-          <button class="swatch" type="button" data-color="#111111" style="background:#111111" aria-label="Black"></button>
-        </div>
-        <div class="control">
-          <span>Color</span>
-          <input id="color" type="color" value="#ff3b30" />
-        </div>
-        <div class="control">
-          <span>Stroke</span>
-          <span class="value" id="strokeValue">5</span>
-          <input id="stroke" type="range" min="2" max="18" value="5" />
-        </div>
-        <div class="control">
-          <span>Text</span>
-          <span class="value" id="textSizeValue">28</span>
-          <input id="textSize" type="range" min="14" max="72" value="28" />
+      <div class="color-swatches" id="colorSwatches">
+        <button class="swatch active" type="button" data-color="#ff3b30" style="background:#ff3b30" aria-label="Red"></button>
+        <button class="swatch" type="button" data-color="#ff9500" style="background:#ff9500" aria-label="Orange"></button>
+        <button class="swatch" type="button" data-color="#ffcc00" style="background:#ffcc00" aria-label="Yellow"></button>
+        <button class="swatch" type="button" data-color="#34c759" style="background:#34c759" aria-label="Green"></button>
+        <button class="swatch" type="button" data-color="#00c7be" style="background:#00c7be" aria-label="Teal"></button>
+        <button class="swatch" type="button" data-color="#007aff" style="background:#007aff" aria-label="Blue"></button>
+        <button class="swatch" type="button" data-color="#5856d6" style="background:#5856d6" aria-label="Indigo"></button>
+        <button class="swatch" type="button" data-color="#af52de" style="background:#af52de" aria-label="Purple"></button>
+        <button class="swatch" type="button" data-color="#ff2d55" style="background:#ff2d55" aria-label="Pink"></button>
+        <button class="swatch" type="button" data-color="#ffffff" style="background:#ffffff" aria-label="White"></button>
+        <button class="swatch" type="button" data-color="#8e8e93" style="background:#8e8e93" aria-label="Gray"></button>
+        <button class="swatch" type="button" data-color="#111111" style="background:#111111" aria-label="Black"></button>
+      </div>
+      <div class="control style-control" id="colorControl">
+        <span>Color</span>
+        <input id="color" type="color" value="#ff3b30" />
+      </div>
+      <div class="control style-control" id="strokeControl">
+          <span id="strokeLabel">Stroke</span>
+        <span class="value" id="strokeValue">5 px</span>
+        <input id="stroke" type="range" min="2" max="18" value="5" />
+      </div>
+      <div class="control style-control" id="textSizeControl">
+        <span>Text size</span>
+        <span class="value" id="textSizeValue">28 px</span>
+        <input id="textSize" type="range" min="14" max="72" value="28" />
+      </div>
+      </div>
+      <div class="section">
+        <label class="toggle-row">
+          <span>Presentation canvas</span>
+          <input id="layoutEnabled" type="checkbox" />
+        </label>
+        <div class="layout-controls" id="layoutControls" hidden>
+          <div class="control">
+            <span>Background</span>
+            <select id="layoutBackground">
+              <option value="soft">Soft</option>
+              <option value="dark">Dark</option>
+              <option value="blue">Blue</option>
+              <option value="sunset">Sunset</option>
+              <option value="plain">Plain</option>
+            </select>
+          </div>
+          <div class="control">
+            <span>Aspect</span>
+            <select id="layoutAspect">
+              <option value="auto">Auto</option>
+              <option value="square">Square</option>
+              <option value="4:3">4:3</option>
+              <option value="16:9">16:9</option>
+            </select>
+          </div>
+          <div class="control">
+            <span>Padding</span>
+            <span class="value" id="layoutPaddingValue">48 px</span>
+            <input id="layoutPadding" type="range" min="0" max="220" value="48" />
+          </div>
+          <div class="control">
+            <span>Corners</span>
+            <span class="value" id="layoutRadiusValue">14 px</span>
+            <input id="layoutRadius" type="range" min="0" max="64" value="14" />
+          </div>
+          <div class="control">
+            <span>Shadow</span>
+            <span class="value" id="layoutShadowValue">28 px</span>
+            <input id="layoutShadow" type="range" min="0" max="80" value="28" />
+          </div>
         </div>
       </div>
       <div class="section">
         <div class="panel-actions">
-          <button class="button secondary" id="undo" type="button" title="Undo last annotation" disabled>
-            <span class="icon" aria-hidden="true">&lt;</span>Undo
+          <button class="button secondary" id="undo" type="button" title="Undo last annotation (Cmd/Ctrl+Z)" disabled>
+            <span class="icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 14 4 9l5-5"></path>
+                <path d="M4 9h10a6 6 0 0 1 0 12h-2"></path>
+              </svg>
+            </span><span>Undo</span>
           </button>
-          <button class="button secondary" id="redo" type="button" title="Redo annotation" disabled>
-            <span class="icon" aria-hidden="true">&gt;</span>Redo
+          <button class="button secondary" id="redo" type="button" title="Redo annotation (Cmd/Ctrl+Shift+Z)" disabled>
+            <span class="icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m15 14 5-5-5-5"></path>
+                <path d="M20 9H10a6 6 0 0 0 0 12h2"></path>
+              </svg>
+            </span><span>Redo</span>
           </button>
           <button class="button secondary" id="clear" type="button" title="Clear all annotations" disabled>
-            <span class="icon" aria-hidden="true">x</span>Clear
+            <span class="icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 6h18"></path>
+                <path d="M8 6V4h8v2"></path>
+                <path d="M19 6l-1 14H6L5 6"></path>
+                <path d="M10 11v5"></path>
+                <path d="M14 11v5"></path>
+              </svg>
+            </span><span>Clear</span>
           </button>
         </div>
       </div>
-      <div class="section">
-        <span class="label">Preview</span>
+      <div class="section" id="previewSection">
         <div class="preview-box">
-          <canvas id="stylePreview" width="230" height="92"></canvas>
+          <span class="label">Preview</span>
+          <canvas id="stylePreview" width="132" height="44"></canvas>
         </div>
       </div>
     </aside>
     <main class="stage">
       <div id="status" class="loading">Stitching screenshot...</div>
       <div class="canvas-shell" id="canvasShell" hidden>
-        <canvas id="editorCanvas"></canvas>
+        <div class="mini-toolbar" id="miniToolbar" hidden aria-label="Selected annotation actions">
+          <button class="mini-swatch" type="button" data-mini-color="#ff453a" style="--preset-color:#ff453a" title="Red" aria-label="Red"></button>
+          <button class="mini-swatch" type="button" data-mini-color="#ffd60a" style="--preset-color:#ffd60a" title="Yellow" aria-label="Yellow"></button>
+          <button class="mini-swatch" type="button" data-mini-color="#34c759" style="--preset-color:#34c759" title="Green" aria-label="Green"></button>
+          <button class="mini-swatch" type="button" data-mini-color="#64d2ff" style="--preset-color:#64d2ff" title="Blue" aria-label="Blue"></button>
+          <button class="mini-swatch" type="button" data-mini-color="#ffffff" style="--preset-color:#ffffff" title="White" aria-label="White"></button>
+          <button class="mini-swatch" type="button" data-mini-color="#111111" style="--preset-color:#111111" title="Black" aria-label="Black"></button>
+          <button class="mini-action" id="duplicateSelected" type="button" title="Duplicate annotation" aria-label="Duplicate annotation">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="8" y="8" width="11" height="11" rx="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </button>
+          <button class="mini-action" id="deleteSelected" type="button" title="Delete annotation" aria-label="Delete annotation">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 6h18"></path>
+              <path d="M8 6V4h8v2"></path>
+              <path d="M19 6l-1 14H6L5 6"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="canvas-stack" id="canvasStack">
+          <canvas id="baseDisplayCanvas" aria-hidden="true"></canvas>
+          <canvas id="editorCanvas"></canvas>
+        </div>
       </div>
     </main>
   </div>

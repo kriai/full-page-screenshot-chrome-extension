@@ -24,12 +24,16 @@ export controls.
 - Download filenames include the page domain, page title, capture mode, and
   timestamp.
 - Annotate screenshots with arrows, boxes, freehand pen, click-to-type text,
-  pixelate, and redaction before copying or exporting.
+  crop, blur, pixelate, and redaction before copying or exporting.
 - Move and resize existing annotations by clicking them directly.
 - Add numbered step markers for walkthroughs and bug reports.
+- Add a presentation canvas with background, padding, rounded corners, shadow,
+  and aspect-ratio controls for polished exports.
 - Undo and redo annotation changes.
 - Automatically save captures to a local history page. History keeps 20 images
   by default and can be changed from the history page.
+- Reopen saved history items as editable projects with annotations and export
+  layout settings preserved.
 - Preview the active annotation style before drawing.
 - On-page capture progress shows the current capture step without appearing in
   the final screenshot.
