@@ -16,6 +16,11 @@
       --muted: #9da8b8;
       --accent: #6c8cff;
       --danger: #ff5f68;
+      --focus-ring: #9fb2ff;
+      --selected-bg: rgba(108, 140, 255, 0.16);
+      --selected-border: rgba(159, 178, 255, 0.82);
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+      --ease-snap: cubic-bezier(0.2, 0.8, 0.2, 1);
     }
     body {
       margin: 0;
@@ -24,6 +29,7 @@
         var(--bg);
       color: var(--text);
       font-family: system-ui, sans-serif;
+      animation: pageIn 160ms var(--ease-out) both;
     }
     header {
       position: sticky;
@@ -37,6 +43,12 @@
       background: rgba(17, 19, 24, 0.94);
       border-bottom: 1px solid var(--line);
       backdrop-filter: blur(14px);
+      animation: slideDown 160ms var(--ease-out) both;
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
     h1 {
       flex: 1;
@@ -62,6 +74,15 @@
       font: inherit;
       font-size: 13px;
       padding: 0 8px;
+      transition:
+        border-color 160ms ease,
+        box-shadow 140ms ease,
+        transform 140ms var(--ease-snap);
+    }
+    input[type="number"]:focus {
+      border-color: var(--focus-ring);
+      box-shadow: 0 0 0 3px rgba(108, 140, 255, 0.14);
+      outline: none;
     }
     button,
     a {
@@ -78,76 +99,319 @@
       font-size: 13px;
       padding: 0 12px;
       text-decoration: none;
+      transform: translateY(0) scale(1);
+      transition:
+        background-color 160ms ease,
+        border-color 160ms ease,
+        box-shadow 160ms ease,
+        transform 160ms var(--ease-snap);
     }
     button:hover,
     a:hover {
       border-color: var(--accent);
       background: #26304b;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+      transform: translateY(-1px);
+    }
+    button:active,
+    a:active {
+      transform: translateY(0) scale(0.985);
+    }
+    button:disabled {
+      cursor: default;
+      color: var(--muted);
+      opacity: 1;
+      transform: none;
+    }
+    button:disabled:hover {
+      background: var(--panel-2);
+      border-color: var(--line-strong);
+      box-shadow: none;
+      transform: none;
+    }
+    button:focus-visible,
+    a:focus-visible {
+      outline: 2px solid var(--focus-ring);
+      outline-offset: 2px;
     }
     main {
-      padding: 22px;
+      padding: 18px;
     }
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-      gap: 18px;
+      grid-template-columns: repeat(auto-fill, minmax(238px, 1fr));
+      gap: 14px;
     }
     .card {
       overflow: hidden;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--panel);
-      box-shadow: 0 14px 44px rgba(0, 0, 0, 0.24);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+      transform: translateY(0);
+      transition:
+        border-color 180ms ease,
+        box-shadow 140ms ease,
+        transform 140ms var(--ease-snap);
     }
     .card:hover {
       border-color: var(--line-strong);
+      box-shadow: 0 14px 38px rgba(0, 0, 0, 0.26);
+      transform: translateY(-1px);
+    }
+    .card:focus-visible {
+      border-color: var(--selected-border);
+      outline: 2px solid var(--focus-ring);
+      outline-offset: 3px;
+    }
+    .card.removing {
+      pointer-events: none;
+      animation: cardOut 140ms ease-in both;
     }
     .thumb {
       display: block;
       width: 100%;
-      height: 180px;
+      height: 148px;
       object-fit: contain;
       background: #090b0f;
       border-bottom: 1px solid var(--line);
+      cursor: pointer;
+      transition:
+        filter 140ms ease,
+        transform 140ms var(--ease-snap);
+    }
+    .card:hover .thumb {
+      filter: brightness(1.04);
+      transform: scale(1.005);
     }
     .body {
-      padding: 12px;
+      padding: 10px;
     }
     .title {
       overflow: hidden;
-      margin: 0 0 6px;
+      margin: 0 0 5px;
       font-size: 13px;
       font-weight: 700;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
     .meta {
-      margin: 0 0 12px;
+      margin: 0 0 8px;
       color: var(--muted);
       font-size: 12px;
     }
+    .meta-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .domain {
+      overflow: hidden;
+      min-width: 0;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .pill {
+      flex: 0 0 auto;
+      border: 1px solid rgba(108, 140, 255, 0.28);
+      border-radius: 999px;
+      background: rgba(108, 140, 255, 0.12);
+      color: #cdd7ff;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1;
+      padding: 4px 7px;
+    }
+    .upload-status {
+      display: inline-flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      width: fit-content;
+      max-width: 100%;
+      margin: 0 0 8px;
+      border: 1px solid rgba(67, 209, 166, 0.24);
+      border-radius: 999px;
+      background: rgba(67, 209, 166, 0.08);
+      color: #baeedd;
+      font-size: 11px;
+      padding: 5px 7px;
+    }
+    .upload-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .icon-button {
+      width: 30px;
+      min-width: 30px;
+      min-height: 30px;
+      padding: 0;
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .icon-button svg {
+      display: block;
+      width: 14px;
+      height: 14px;
+      stroke: currentColor;
+    }
+    .icon-button.copied {
+      border-color: var(--selected-border);
+      background: var(--selected-bg);
+    }
+    .upload-status.expired {
+      display: inline-flex;
+      justify-content: flex-start;
+      border-color: rgba(255, 95, 104, 0.28);
+      border-radius: 999px;
+      background: rgba(255, 95, 104, 0.08);
+      color: #ffc4c8;
+      padding: 5px 8px;
+    }
+    .upload-status.expired .upload-actions {
+      display: none;
+    }
+    .upload-status[hidden] {
+      display: none;
+    }
+    .upload-timer {
+      color: inherit;
+      font-weight: 750;
+      white-space: nowrap;
+    }
     .actions {
       display: flex;
-      gap: 8px;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .actions .icon-button.danger-action:hover,
+    .actions .icon-button.danger-action.confirming {
+      border-color: rgba(255, 95, 104, 0.78);
+      background: rgba(255, 95, 104, 0.14);
+      color: #ffc4c8;
+    }
+    .actions .icon-button.confirming {
+      width: auto;
+      padding: 0 9px;
+      font-size: 12px;
+      font-weight: 750;
     }
     #empty {
+      display: grid;
+      justify-items: center;
+      gap: 10px;
       color: var(--muted);
-      padding: 48px 0;
+      padding: 56px 0;
       text-align: center;
+      animation: emptyIn 160ms var(--ease-out) both;
+    }
+    #empty[hidden] {
+      display: none;
+    }
+    #empty strong {
+      color: var(--text);
+      font-size: 14px;
+    }
+    #empty p {
+      max-width: 360px;
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    #backToPage[hidden] {
+      display: none;
+    }
+    @keyframes pageIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(8px) scale(0.99); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes cardOut {
+      from { opacity: 1; transform: translateY(0) scale(1); }
+      to { opacity: 0; transform: translateY(6px) scale(0.98); }
+    }
+    @keyframes emptyIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 1ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 1ms !important;
+      }
+      button:hover,
+      a:hover,
+      .card:hover,
+      .card:hover .thumb {
+        transform: none;
+      }
+    }
+    @media (max-width: 640px) {
+      header {
+        align-items: stretch;
+        flex-direction: column;
+      }
+      h1 {
+        font-size: 15px;
+      }
+      .header-actions {
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .limit-control {
+        flex: 1;
+      }
+      input[type="number"] {
+        flex: 1;
+        min-width: 0;
+      }
+      button,
+      a {
+        min-height: 34px;
+      }
+      main {
+        padding: 14px;
+      }
+      .grid {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
 <body>
   <header>
     <h1>Screenshot History</h1>
-    <label class="limit-control" for="historyLimit">
-      Keep
-      <input id="historyLimit" type="number" min="1" max="50" value="20" />
-    </label>
-    <button id="clearAll" type="button">Clear all</button>
+    <div class="header-actions">
+      <label class="limit-control" for="historyLimit">
+        Keep
+        <input id="historyLimit" type="number" min="1" max="50" value="20" />
+      </label>
+      <button id="clearAll" type="button" title="Clear saved screenshots" disabled>Clear all</button>
+    </div>
   </header>
   <main>
-    <div id="empty" hidden>No saved screenshots yet.</div>
+    <div id="empty" hidden>
+      <strong>No saved screenshots yet</strong>
+      <p>Capture a page from the extension button, then your recent screenshots will appear here.</p>
+      <button id="backToPage" type="button" title="Return to the page you opened history from" hidden>Back to page</button>
+    </div>
     <div class="grid" id="grid"></div>
   </main>
   <script src="history.js"></script>

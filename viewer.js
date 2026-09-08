@@ -1,28 +1,70 @@
 const editor = {
   baseCanvas: null,
+  baseDisplayCanvas: null,
+  baseDisplayCtx: null,
   canvas: null,
   ctx: null,
+  annotateMode: false,
   currentTool: "arrow",
   activeTextInput: null,
   baseName: "screenshot",
   dragStart: null,
   draft: null,
+  exportStatusTimer: null,
+  exportBaseName: "screenshot",
+  exportDirty: true,
   exportVersion: 0,
   exportUrls: [],
+  historySaveTimer: null,
+  historyReady: false,
   interaction: null,
+  layout: {
+    enabled: false,
+    background: "soft",
+    padding: 48,
+    radius: 14,
+    shadow: 28,
+    aspect: "auto",
+  },
+  nextOperationId: 1,
   operations: [],
+  pendingPreview: null,
+  previewScale: 1,
+  projectBaseDataUrl: "",
+  pendingStyleEdit: null,
+  redrawFrame: 0,
   redoStack: [],
   selectedIndex: -1,
+  undoStack: [],
+  zoom: 1,
+  zoomMode: "fit",
 };
 
 const toolHints = {
   arrow: "Drag to draw an arrow.",
   rect: "Drag to draw a box.",
+  crop: "Drag to crop the screenshot.",
   pen: "Drag to draw freehand.",
   text: "Click the screenshot, then type.",
   step: "Click to place a numbered marker.",
+  blur: "Drag over content to blur it.",
   pixelate: "Drag over content to pixelate it.",
   redact: "Drag over content to cover it.",
+};
+
+const defaultStyle = { color: "#ff453a", strokeWidth: 5, textSize: 28 };
+const MAX_EDITOR_PREVIEW_PIXELS = 24000000;
+
+const shortcutToolMap = {
+  a: "arrow",
+  b: "rect",
+  c: "crop",
+  p: "pen",
+  t: "text",
+  s: "step",
+  u: "blur",
+  x: "pixelate",
+  r: "redact",
 };
 
 function loadImage(src) {
@@ -188,6 +230,28 @@ function drawCapture(capture, images) {
     return canvas;
   }
 
+  if (metrics.scrollRect) {
+    const rect = metrics.scrollRect;
+    const sx = Math.round(rect.left * scale);
+    const sy = Math.round(rect.top * scale);
+    const sw = Math.round(rect.width * scale);
+    const visibleHeight = Math.round(rect.height * scale);
+
+    canvas.width = sw;
+    canvas.height = Math.round(metrics.pageHeight * scale);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    frames.forEach((frame, i) => {
+      const dy = Math.round(frame.y * scale);
+      const remainingHeight = Math.max(0, canvas.height - dy);
+      const sh = Math.min(visibleHeight, remainingHeight);
+      if (sh > 0) ctx.drawImage(images[i], sx, sy, sw, sh, 0, dy, sw, sh);
+    });
+
+    return canvas;
+  }
+
   canvas.width = images[0].width;
   canvas.height = Math.round(metrics.pageHeight * scale);
 
@@ -210,6 +274,68 @@ function setDownload(anchor, blob, filename) {
 function clearExportUrls() {
   for (const url of editor.exportUrls) URL.revokeObjectURL(url);
   editor.exportUrls = [];
+  for (const id of ["downloadPng", "downloadJpeg", "downloadPdf"]) {
+    const anchor = document.getElementById(id);
+    if (!anchor) continue;
+    anchor.removeAttribute("href");
+    delete anchor.dataset.exportReady;
+  }
+}
+
+function markExportsStale(baseName = editor.exportBaseName, options = {}) {
+  editor.exportBaseName = baseName || editor.baseName || "screenshot";
+  editor.exportDirty = true;
+  editor.exportVersion++;
+  clearExportUrls();
+  if (!options.quiet) showExportStatus("Edited", "pending");
+  scheduleProjectHistorySave();
+}
+
+function setCanvasCssWidth(canvas, width) {
+  if (!canvas) return;
+  canvas.style.width = width ? `${width}px` : "";
+}
+
+function syncDisplayCanvases() {
+  if (!editor.baseCanvas || !editor.baseDisplayCanvas || !editor.canvas) return;
+
+  const pixels = editor.baseCanvas.width * editor.baseCanvas.height;
+  editor.previewScale =
+    pixels > MAX_EDITOR_PREVIEW_PIXELS
+      ? Math.sqrt(MAX_EDITOR_PREVIEW_PIXELS / pixels)
+      : 1;
+  const previewWidth = Math.max(1, Math.round(editor.baseCanvas.width * editor.previewScale));
+  const previewHeight = Math.max(1, Math.round(editor.baseCanvas.height * editor.previewScale));
+
+  for (const canvas of [editor.baseDisplayCanvas, editor.canvas]) {
+    if (canvas.width !== previewWidth) canvas.width = previewWidth;
+    if (canvas.height !== previewHeight) canvas.height = previewHeight;
+  }
+
+  editor.baseDisplayCtx.clearRect(
+    0,
+    0,
+    editor.baseDisplayCanvas.width,
+    editor.baseDisplayCanvas.height
+  );
+  editor.baseDisplayCtx.drawImage(
+    editor.baseCanvas,
+    0,
+    0,
+    editor.baseDisplayCanvas.width,
+    editor.baseDisplayCanvas.height
+  );
+}
+
+function requestRedraw(preview = null) {
+  editor.pendingPreview = preview;
+  if (editor.redrawFrame) return;
+  editor.redrawFrame = requestAnimationFrame(() => {
+    editor.redrawFrame = 0;
+    const nextPreview = editor.pendingPreview;
+    editor.pendingPreview = null;
+    redraw(nextPreview);
+  });
 }
 
 function normalizeRect(start, end) {
@@ -222,9 +348,11 @@ function normalizeRect(start, end) {
 
 function pointerToCanvasPoint(event) {
   const rect = editor.canvas.getBoundingClientRect();
+  const width = editor.baseCanvas?.width || editor.canvas.width;
+  const height = editor.baseCanvas?.height || editor.canvas.height;
   return {
-    x: ((event.clientX - rect.left) / rect.width) * editor.canvas.width,
-    y: ((event.clientY - rect.top) / rect.height) * editor.canvas.height,
+    x: ((event.clientX - rect.left) / rect.width) * width,
+    y: ((event.clientY - rect.top) / rect.height) * height,
   };
 }
 
@@ -234,6 +362,44 @@ function currentStyle() {
     strokeWidth: Number(document.getElementById("stroke").value),
     textSize: Number(document.getElementById("textSize").value),
   };
+}
+
+function setCurrentColor(value) {
+  const color = document.getElementById("color");
+  if (!color) return;
+
+  color.value = value;
+  syncSwatchesForColor();
+  syncColorButtons(value);
+}
+
+function setCurrentStyle(style) {
+  const color = document.getElementById("color");
+  const stroke = document.getElementById("stroke");
+  const strokeValue = document.getElementById("strokeValue");
+  const textSize = document.getElementById("textSize");
+  const textSizeValue = document.getElementById("textSizeValue");
+
+  if (style.color && color) color.value = style.color;
+  if (style.strokeWidth && stroke) {
+    stroke.value = String(style.strokeWidth);
+  }
+  if (style.textSize && textSize) {
+    textSize.value = String(style.textSize);
+    if (textSizeValue) textSizeValue.textContent = `${textSize.value} px`;
+  }
+  syncSwatchesForColor();
+  if (color) syncColorButtons(color.value);
+  syncStrokeValueLabel();
+  renderStylePreview();
+}
+
+function syncColorButtons(value) {
+  if (!value) return;
+  const normalized = value.toLowerCase();
+  document.querySelectorAll("[data-mini-color]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.miniColor.toLowerCase() === normalized);
+  });
 }
 
 function textFromEditor(element) {
@@ -246,8 +412,8 @@ function openTextEditor(point, baseName) {
   const shell = document.getElementById("canvasShell");
   const canvasRect = editor.canvas.getBoundingClientRect();
   const shellRect = shell.getBoundingClientRect();
-  const scaleX = canvasRect.width / editor.canvas.width;
-  const scaleY = canvasRect.height / editor.canvas.height;
+  const scaleX = canvasRect.width / editor.baseCanvas.width;
+  const scaleY = canvasRect.height / editor.baseCanvas.height;
   const wrap = document.createElement("div");
   const input = document.createElement("div");
   const actions = document.createElement("div");
@@ -312,11 +478,143 @@ function cloneOperation(operation) {
   return JSON.parse(JSON.stringify(operation));
 }
 
-function pushOperation(operation, baseName = editor.baseName) {
-  editor.operations.push(operation);
+function sameOperation(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function cloneLayout(layout = editor.layout) {
+  return JSON.parse(JSON.stringify(layout));
+}
+
+function cloneProject() {
+  if (!editor.projectBaseDataUrl && editor.baseCanvas) {
+    editor.projectBaseDataUrl = editor.baseCanvas.toDataURL("image/png");
+  }
+  return {
+    version: 1,
+    baseDataUrl: editor.projectBaseDataUrl,
+    baseWidth: editor.baseCanvas.width,
+    baseHeight: editor.baseCanvas.height,
+    operations: editor.operations.map(cloneOperation),
+    layout: cloneLayout(),
+  };
+}
+
+function ensureOperationId(operation) {
+  if (!operation.id) operation.id = editor.nextOperationId++;
+  return operation;
+}
+
+function findOperationIndexById(id) {
+  return editor.operations.findIndex((operation) => operation.id === id);
+}
+
+function syncSwatchesForColor() {
+  const color = document.getElementById("color");
+  if (!color) return;
+
+  document.querySelectorAll("[data-color]").forEach((swatch) => {
+    swatch.classList.toggle(
+      "active",
+      swatch.dataset.color.toLowerCase() === color.value.toLowerCase()
+    );
+  });
+}
+
+function loadOperationStyle(operation) {
+  if (!operation) return;
+
+  const color = document.getElementById("color");
+  const stroke = document.getElementById("stroke");
+  const strokeValue = document.getElementById("strokeValue");
+  const textSize = document.getElementById("textSize");
+  const textSizeValue = document.getElementById("textSizeValue");
+
+  if (operation.color && color) color.value = operation.color;
+  if (operation.strokeWidth && stroke) {
+    stroke.value = String(operation.strokeWidth);
+  }
+  if (operation.textSize && textSize) {
+    textSize.value = String(operation.textSize);
+    if (textSizeValue) textSizeValue.textContent = `${textSize.value} px`;
+  }
+  syncSwatchesForColor();
+  if (color) syncColorButtons(color.value);
+  syncStyleControlVisibility();
+  renderStylePreview();
+}
+
+function commitUndoAction(action) {
+  if (!action) return;
+  editor.undoStack.push(action);
   editor.redoStack = [];
-  editor.selectedIndex = editor.operations.length - 1;
+  syncEditActionState();
+}
+
+function applyUndoAction(action) {
+  if (action.type === "add") {
+    const index = findOperationIndexById(action.operation.id);
+    if (index >= 0) editor.operations.splice(index, 1);
+    editor.selectedIndex = Math.min(index, editor.operations.length - 1);
+  }
+  if (action.type === "replace") {
+    const index = findOperationIndexById(action.id);
+    if (index >= 0) {
+      editor.operations[index] = cloneOperation(action.before);
+      editor.selectedIndex = index;
+    }
+  }
+  if (action.type === "remove") {
+    editor.operations.splice(action.index, 0, cloneOperation(action.operation));
+    editor.selectedIndex = action.index;
+  }
+  if (action.type === "clear") {
+    editor.operations = action.operations.map(cloneOperation);
+    editor.selectedIndex = editor.operations.length - 1;
+  }
+}
+
+function applyRedoAction(action) {
+  if (action.type === "add") {
+    editor.operations.push(cloneOperation(action.operation));
+    editor.selectedIndex = editor.operations.length - 1;
+  }
+  if (action.type === "replace") {
+    const index = findOperationIndexById(action.id);
+    if (index >= 0) {
+      editor.operations[index] = cloneOperation(action.after);
+      editor.selectedIndex = index;
+    }
+  }
+  if (action.type === "remove") {
+    const index = findOperationIndexById(action.operation.id);
+    if (index >= 0) editor.operations.splice(index, 1);
+    editor.selectedIndex = Math.min(index, editor.operations.length - 1);
+  }
+  if (action.type === "clear") {
+    editor.operations = [];
+    editor.selectedIndex = -1;
+  }
+}
+
+function syncAfterHistoryChange(baseName) {
   redraw();
+  syncEditActionState();
+  const selected = editor.operations[editor.selectedIndex];
+  if (selected) loadOperationStyle(selected);
+  syncStyleControlVisibility();
+  renderStylePreview();
+  scheduleExportRefresh(baseName);
+}
+
+function pushOperation(operation, baseName = editor.baseName) {
+  ensureOperationId(operation);
+  editor.operations.push(operation);
+  editor.selectedIndex = editor.operations.length - 1;
+  commitUndoAction({ type: "add", operation: cloneOperation(operation) });
+  redraw();
+  syncEditActionState();
+  syncStyleControlVisibility();
   scheduleExportRefresh(baseName);
 }
 
@@ -380,7 +678,16 @@ function operationBounds(operation) {
       height: radius * 2,
     };
   }
+  if (operation.type === "blur") return { ...operation.rect };
   return { x: 0, y: 0, width: 0, height: 0 };
+}
+
+function syncMiniToolbar() {
+  const toolbar = document.getElementById("miniToolbar");
+  if (toolbar) {
+    toolbar.hidden = true;
+    toolbar.classList.remove("visible");
+  }
 }
 
 function containsPoint(rect, point, padding = 0) {
@@ -409,7 +716,7 @@ function selectionHandles(operation) {
 }
 
 function handleAtPoint(operation, point) {
-  const scale = editor.canvas.width / editor.canvas.getBoundingClientRect().width;
+  const scale = editor.baseCanvas.width / editor.canvas.getBoundingClientRect().width;
   const radius = Math.max(8, 6 * scale);
   return selectionHandles(operation).find(
     (handle) => Math.hypot(handle.x - point.x, handle.y - point.y) <= radius
@@ -430,7 +737,7 @@ function drawSelection(ctx) {
   const bounds = operationBounds(operation);
   ctx.save();
   ctx.strokeStyle = "#78a0ff";
-  ctx.lineWidth = Math.max(2, editor.canvas.width / editor.canvas.getBoundingClientRect().width);
+  ctx.lineWidth = Math.max(2, editor.baseCanvas.width / editor.canvas.getBoundingClientRect().width);
   ctx.setLineDash([8, 6]);
   ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
   ctx.setLineDash([]);
@@ -533,8 +840,8 @@ function renderStylePreview() {
   const canvas = document.getElementById("stylePreview");
   if (!canvas) return;
 
-  const cssWidth = 230;
-  const cssHeight = 92;
+  const cssWidth = 132;
+  const cssHeight = 44;
   const scale = Math.max(1, window.devicePixelRatio || 1);
   if (canvas.width !== cssWidth * scale || canvas.height !== cssHeight * scale) {
     canvas.width = cssWidth * scale;
@@ -543,100 +850,149 @@ function renderStylePreview() {
 
   const ctx = canvas.getContext("2d");
   const style = currentStyle();
+  const previewTool = styleControlTool();
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
   ctx.clearRect(0, 0, cssWidth, cssHeight);
 
-  if (editor.currentTool === "text") {
+  if (previewTool === "text") {
     drawText(ctx, {
       type: "text",
-      point: { x: 22, y: 26 },
+      point: { x: 14, y: 12 },
       text: "Text",
       ...style,
     });
     return;
   }
-  if (editor.currentTool === "step") {
+  if (previewTool === "step") {
     drawStep(ctx, {
       type: "step",
       point: { x: cssWidth / 2, y: cssHeight / 2 },
       number: nextStepNumber(),
-      radius: 36,
+      radius: 17,
       ...style,
     });
     return;
   }
-  if (editor.currentTool === "rect") {
+  if (previewTool === "rect") {
     drawRect(ctx, {
       type: "rect",
-      rect: { x: 42, y: 24, width: 146, height: 44 },
+      rect: { x: 24, y: 13, width: 84, height: 20 },
       ...style,
     });
     return;
   }
-  if (editor.currentTool === "pen") {
+  if (previewTool === "pen") {
     drawPen(ctx, {
       type: "pen",
       points: [
-        { x: 32, y: 60 },
-        { x: 76, y: 30 },
-        { x: 122, y: 58 },
-        { x: 180, y: 28 },
+        { x: 20, y: 36 },
+        { x: 50, y: 15 },
+        { x: 78, y: 34 },
+        { x: 110, y: 16 },
       ],
       ...style,
     });
     return;
   }
-  if (editor.currentTool === "pixelate") {
+  if (previewTool === "pixelate") {
     ctx.fillStyle = "#344055";
-    ctx.fillRect(48, 24, 132, 44);
+    ctx.fillRect(24, 13, 84, 20);
     ctx.fillStyle = "#78a0ff";
-    for (let x = 48; x < 180; x += 16) {
-      for (let y = 24; y < 68; y += 16) ctx.fillRect(x, y, 13, 13);
+    for (let x = 24; x < 108; x += 12) {
+      for (let y = 13; y < 33; y += 12) ctx.fillRect(x, y, 10, 10);
     }
     return;
   }
-  if (editor.currentTool === "redact") {
+  if (previewTool === "blur") {
+    ctx.fillStyle = "#344055";
+    ctx.fillRect(24, 13, 84, 20);
+    ctx.fillStyle = "#e8edf6";
+    ctx.fillRect(34, 18, 64, 4);
+    ctx.fillRect(34, 26, 52, 4);
+    applyBlur(ctx, {
+      type: "blur",
+      rect: { x: 24, y: 13, width: 84, height: 20 },
+      ...style,
+    });
+    return;
+  }
+  if (previewTool === "redact") {
     applyRedact(ctx, {
       type: "redact",
-      rect: { x: 48, y: 28, width: 132, height: 36 },
+      rect: { x: 24, y: 13, width: 84, height: 20 },
+      ...style,
     });
     return;
   }
   drawArrow(ctx, {
     type: "arrow",
-    from: { x: 34, y: 62 },
-    to: { x: 184, y: 30 },
+    from: { x: 20, y: 34 },
+    to: { x: 112, y: 14 },
     ...style,
   });
+}
+
+function applyAnnotationShadow(ctx, size = 6) {
+  ctx.shadowColor = "rgba(0, 0, 0, 0.28)";
+  ctx.shadowBlur = Math.max(2, size * 0.45);
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = Math.max(1, size * 0.18);
+}
+
+function clearAnnotationShadow(ctx) {
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
 }
 
 function drawArrow(ctx, operation) {
   const { from, to, color, strokeWidth } = operation;
   const angle = Math.atan2(to.y - from.y, to.x - from.x);
-  const headLength = Math.max(14, strokeWidth * 4);
+  const arrowLength = Math.hypot(to.x - from.x, to.y - from.y);
+  if (arrowLength < 1) return;
+
+  const shaftWidth = Math.max(3, strokeWidth);
+  const tailHalf = shaftWidth * 0.42;
+  const neckHalf = shaftWidth * 0.72;
+  const headLength = Math.min(arrowLength * 0.42, Math.max(16, shaftWidth * 3.4));
+  const headWidth = Math.min(arrowLength * 0.5, Math.max(headLength * 0.82, shaftWidth * 2.35));
+  const headHalf = headWidth / 2;
+  const unitX = Math.cos(angle);
+  const unitY = Math.sin(angle);
+  const perpendicularX = -unitY;
+  const perpendicularY = unitX;
+  const base = {
+    x: to.x - unitX * headLength,
+    y: to.y - unitY * headLength,
+  };
+  const shaftEnd = {
+    x: base.x + unitX * Math.min(shaftWidth * 0.18, headLength * 0.18),
+    y: base.y + unitY * Math.min(shaftWidth * 0.18, headLength * 0.18),
+  };
 
   ctx.save();
-  ctx.strokeStyle = color;
   ctx.fillStyle = color;
-  ctx.lineWidth = strokeWidth;
-  ctx.lineCap = "round";
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.min(3.5, Math.max(1.2, shaftWidth * 0.16));
   ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  applyAnnotationShadow(ctx, shaftWidth);
+
   ctx.beginPath();
-  ctx.moveTo(from.x, from.y);
+  ctx.moveTo(from.x + perpendicularX * tailHalf, from.y + perpendicularY * tailHalf);
+  ctx.lineTo(shaftEnd.x + perpendicularX * neckHalf, shaftEnd.y + perpendicularY * neckHalf);
+  ctx.lineTo(base.x + perpendicularX * headHalf, base.y + perpendicularY * headHalf);
   ctx.lineTo(to.x, to.y);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(to.x, to.y);
-  ctx.lineTo(
-    to.x - headLength * Math.cos(angle - Math.PI / 6),
-    to.y - headLength * Math.sin(angle - Math.PI / 6)
-  );
-  ctx.lineTo(
-    to.x - headLength * Math.cos(angle + Math.PI / 6),
-    to.y - headLength * Math.sin(angle + Math.PI / 6)
-  );
+  ctx.lineTo(base.x - perpendicularX * headHalf, base.y - perpendicularY * headHalf);
+  ctx.lineTo(shaftEnd.x - perpendicularX * neckHalf, shaftEnd.y - perpendicularY * neckHalf);
+  ctx.lineTo(from.x - perpendicularX * tailHalf, from.y - perpendicularY * tailHalf);
+  ctx.arc(from.x, from.y, tailHalf, angle - Math.PI / 2, angle + Math.PI / 2, true);
   ctx.closePath();
   ctx.fill();
+
+  clearAnnotationShadow(ctx);
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -646,6 +1002,7 @@ function drawRect(ctx, operation) {
   ctx.strokeStyle = color;
   ctx.lineWidth = strokeWidth;
   ctx.lineJoin = "round";
+  applyAnnotationShadow(ctx, strokeWidth);
   ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
   ctx.restore();
 }
@@ -657,6 +1014,7 @@ function drawPen(ctx, operation) {
   ctx.lineWidth = operation.strokeWidth;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
+  applyAnnotationShadow(ctx, operation.strokeWidth);
   ctx.beginPath();
   ctx.moveTo(operation.points[0].x, operation.points[0].y);
   for (const point of operation.points.slice(1)) {
@@ -677,6 +1035,7 @@ function drawText(ctx, operation) {
   ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
   ctx.lineWidth = Math.max(1, operation.strokeWidth);
   ctx.fillStyle = operation.color;
+  applyAnnotationShadow(ctx, operation.textSize * 0.35);
   lines.forEach((line, index) => {
     const y = operation.point.y + index * lineHeight;
     ctx.strokeText(line, operation.point.x, y);
@@ -692,6 +1051,7 @@ function drawStep(ctx, operation) {
   ctx.fillStyle = operation.color;
   ctx.strokeStyle = "#fff";
   ctx.lineWidth = Math.max(2, operation.strokeWidth);
+  applyAnnotationShadow(ctx, radius * 0.35);
   ctx.beginPath();
   ctx.arc(operation.point.x, operation.point.y, radius, 0, Math.PI * 2);
   ctx.fill();
@@ -734,18 +1094,100 @@ function applyPixelate(ctx, operation) {
   ctx.restore();
 }
 
+function drawPixelatedBaseRegion(ctx, operation) {
+  const { rect, strokeWidth } = operation;
+  if (!editor.baseCanvas || rect.width < 2 || rect.height < 2) return;
+
+  const x = Math.max(0, Math.floor(rect.x));
+  const y = Math.max(0, Math.floor(rect.y));
+  const right = Math.min(editor.baseCanvas.width, Math.ceil(rect.x + rect.width));
+  const bottom = Math.min(editor.baseCanvas.height, Math.ceil(rect.y + rect.height));
+  const width = Math.max(1, right - x);
+  const height = Math.max(1, bottom - y);
+  const blockSize = Math.max(6, strokeWidth * 4);
+  const sampleWidth = Math.max(1, Math.round(width / blockSize));
+  const sampleHeight = Math.max(1, Math.round(height / blockSize));
+  const temp = document.createElement("canvas");
+  temp.width = sampleWidth;
+  temp.height = sampleHeight;
+  const tempCtx = temp.getContext("2d");
+  tempCtx.drawImage(editor.baseCanvas, x, y, width, height, 0, 0, sampleWidth, sampleHeight);
+
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(temp, x, y, width, height);
+  ctx.restore();
+}
+
+function drawEffectOutline(ctx, operation) {
+  const { rect } = operation;
+  if (!rect || rect.width < 2 || rect.height < 2) return;
+
+  ctx.save();
+  ctx.strokeStyle = operation.type === "redact" ? "#f2f4f8" : "#78a0ff";
+  ctx.lineWidth = Math.max(2, operation.strokeWidth || 2);
+  ctx.setLineDash([10, 8]);
+  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+  ctx.restore();
+}
+
+function applyBlur(ctx, operation) {
+  const { rect, strokeWidth } = operation;
+  if (rect.width < 2 || rect.height < 2) return;
+
+  const blur = Math.max(2, strokeWidth);
+  const pad = Math.ceil(blur * 3);
+  const sx = Math.max(0, Math.floor(rect.x - pad));
+  const sy = Math.max(0, Math.floor(rect.y - pad));
+  const right = Math.min(ctx.canvas.width, Math.ceil(rect.x + rect.width + pad));
+  const bottom = Math.min(ctx.canvas.height, Math.ceil(rect.y + rect.height + pad));
+  const sw = Math.max(1, right - sx);
+  const sh = Math.max(1, bottom - sy);
+  const temp = document.createElement("canvas");
+  temp.width = sw;
+  temp.height = sh;
+  temp.getContext("2d").drawImage(ctx.canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(rect.x, rect.y, rect.width, rect.height);
+  ctx.clip();
+  ctx.filter = `blur(${blur}px)`;
+  ctx.drawImage(temp, sx, sy);
+  ctx.restore();
+}
+
 function applyRedact(ctx, operation) {
   const { rect } = operation;
   ctx.save();
   ctx.fillStyle = "#050507";
+  applyAnnotationShadow(ctx, Math.max(6, Math.min(rect.width, rect.height) * 0.12));
   ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
   ctx.restore();
 }
 
 function drawPreview(ctx, operation) {
-  if (operation.type === "pixelate" || operation.type === "redact") {
+  if (operation.type === "pixelate") {
+    drawPixelatedBaseRegion(ctx, operation);
+    drawEffectOutline(ctx, operation);
+    return;
+  }
+
+  if (
+    operation.type === "redact" ||
+    operation.type === "blur" ||
+    operation.type === "crop"
+  ) {
     ctx.save();
-    ctx.strokeStyle = operation.type === "pixelate" ? "#78a0ff" : "#f2f4f8";
+    ctx.strokeStyle = operation.type === "redact" ? "#f2f4f8" : "#78a0ff";
+    if (operation.type === "crop") {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.38)";
+      ctx.beginPath();
+      ctx.rect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      ctx.rect(operation.rect.x, operation.rect.y, operation.rect.width, operation.rect.height);
+      ctx.fill("evenodd");
+      ctx.strokeStyle = "#ffffff";
+    }
     ctx.lineWidth = Math.max(2, operation.strokeWidth);
     ctx.setLineDash([10, 8]);
     ctx.strokeRect(
@@ -766,18 +1208,54 @@ function applyOperation(ctx, operation) {
   if (operation.type === "pen") drawPen(ctx, operation);
   if (operation.type === "text") drawText(ctx, operation);
   if (operation.type === "step") drawStep(ctx, operation);
+  if (operation.type === "blur") applyBlur(ctx, operation);
   if (operation.type === "pixelate") applyPixelate(ctx, operation);
   if (operation.type === "redact") applyRedact(ctx, operation);
 }
 
+function drawEffectMarker(ctx, operation) {
+  const { rect } = operation;
+  if (!rect || rect.width < 2 || rect.height < 2) return;
+
+  ctx.save();
+  ctx.fillStyle =
+    operation.type === "pixelate" ? "rgba(120, 160, 255, 0.14)" : "rgba(245, 248, 255, 0.12)";
+  ctx.strokeStyle = operation.type === "pixelate" ? "#78a0ff" : "#f2f4f8";
+  ctx.lineWidth = Math.max(2, operation.strokeWidth || 2);
+  ctx.setLineDash([10, 8]);
+  ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+  ctx.restore();
+}
+
+function drawEditorOperation(ctx, operation) {
+  if (operation.type === "pixelate") {
+    drawPixelatedBaseRegion(ctx, operation);
+    return;
+  }
+  if (operation.type === "blur") {
+    drawEffectMarker(ctx, operation);
+    return;
+  }
+  applyOperation(ctx, operation);
+}
+
 function redraw(preview = null) {
+  if (editor.redrawFrame) {
+    cancelAnimationFrame(editor.redrawFrame);
+    editor.redrawFrame = 0;
+    editor.pendingPreview = null;
+  }
+  editor.ctx.setTransform(1, 0, 0, 1, 0, 0);
   editor.ctx.clearRect(0, 0, editor.canvas.width, editor.canvas.height);
-  editor.ctx.drawImage(editor.baseCanvas, 0, 0);
+  editor.ctx.setTransform(editor.previewScale, 0, 0, editor.previewScale, 0, 0);
   for (const operation of editor.operations) {
-    applyOperation(editor.ctx, operation);
+    drawEditorOperation(editor.ctx, operation);
   }
   if (preview) drawPreview(editor.ctx, preview);
   if (!preview) drawSelection(editor.ctx);
+  if (!preview) syncMiniToolbar();
+  editor.ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
 function makeDragOperation(tool, start, end) {
@@ -785,7 +1263,10 @@ function makeDragOperation(tool, start, end) {
   if (tool === "arrow") {
     return { type: "arrow", from: start, to: end, ...style };
   }
-  if (tool === "rect" || tool === "pixelate" || tool === "redact") {
+  if (tool === "redact") {
+    return { type: tool, rect: normalizeRect(start, end), ...style, color: "#111111" };
+  }
+  if (tool === "rect" || tool === "pixelate" || tool === "blur" || tool === "crop") {
     return { type: tool, rect: normalizeRect(start, end), ...style };
   }
   return null;
@@ -800,14 +1281,275 @@ function operationIsLargeEnough(operation) {
   return true;
 }
 
-function scheduleExportRefresh(baseName) {
-  const version = ++editor.exportVersion;
-  setTimeout(() => {
-    if (version === editor.exportVersion) refreshExports(baseName);
-  }, 120);
+function cropToRect(rect, baseName = editor.baseName) {
+  const x = Math.max(0, Math.round(rect.x));
+  const y = Math.max(0, Math.round(rect.y));
+  const width = Math.min(editor.baseCanvas.width - x, Math.round(rect.width));
+  const height = Math.min(editor.baseCanvas.height - y, Math.round(rect.height));
+  if (width < 8 || height < 8) {
+    redraw();
+    return;
+  }
+
+  const cropped = document.createElement("canvas");
+  cropped.width = width;
+  cropped.height = height;
+  cropped.getContext("2d").drawImage(editor.baseCanvas, x, y, width, height, 0, 0, width, height);
+  editor.baseCanvas = cropped;
+  syncDisplayCanvases();
+  setCanvasCssWidth(editor.baseDisplayCanvas, 0);
+  setCanvasCssWidth(editor.canvas, 0);
+  editor.operations.forEach((operation) => moveOperation(operation, -x, -y));
+  editor.selectedIndex = -1;
+  document.getElementById("dimensions").textContent = `${width} x ${height}px`;
+  redraw();
+  applyZoom(fitZoom(), "fit");
+  markExportsStale(baseName);
 }
 
-function renderFinalCanvas() {
+function showExportStatus(text, state = "pending") {
+  const status = document.getElementById("exportStatus");
+  if (!status) return;
+
+  clearTimeout(editor.exportStatusTimer);
+  status.hidden = false;
+  status.textContent = text;
+  status.classList.toggle("done", state === "done");
+  if (state === "done") {
+    editor.exportStatusTimer = setTimeout(() => {
+      status.hidden = true;
+      status.classList.remove("done");
+    }, 1200);
+  }
+}
+
+function scheduleExportRefresh(baseName) {
+  markExportsStale(baseName);
+}
+
+function pulseFeedback(element) {
+  element.classList.remove("feedback");
+  void element.offsetWidth;
+  element.classList.add("feedback");
+}
+
+function setButtonLabel(button, icon, text) {
+  button.textContent = "";
+  const iconElement = document.createElement("span");
+  iconElement.className = "icon";
+  iconElement.setAttribute("aria-hidden", "true");
+  if (icon === "copy") {
+    iconElement.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg>
+    `;
+  } else if (icon === "upload") {
+    iconElement.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3v12"></path>
+        <path d="m7 8 5-5 5 5"></path>
+        <path d="M5 21h14"></path>
+      </svg>
+    `;
+  } else {
+    iconElement.textContent = icon;
+  }
+  button.append(iconElement, document.createTextNode(text));
+}
+
+function syncEditActionState() {
+  const undo = document.getElementById("undo");
+  const redo = document.getElementById("redo");
+  const clear = document.getElementById("clear");
+  if (!undo || !redo || !clear) return;
+
+  undo.disabled = editor.undoStack.length === 0;
+  redo.disabled = editor.redoStack.length === 0;
+  clear.disabled = editor.operations.length === 0;
+}
+
+function beginStyleEdit() {
+  const operation = editor.operations[editor.selectedIndex];
+  if (!operation) return;
+  if (editor.pendingStyleEdit?.id === operation.id) return;
+
+  editor.pendingStyleEdit = {
+    id: operation.id,
+    before: cloneOperation(operation),
+  };
+}
+
+function finalizeStyleEdit() {
+  const pending = editor.pendingStyleEdit;
+  if (!pending) return;
+
+  editor.pendingStyleEdit = null;
+  const index = findOperationIndexById(pending.id);
+  if (index < 0) return;
+
+  const after = cloneOperation(editor.operations[index]);
+  if (sameOperation(pending.before, after)) return;
+  commitUndoAction({
+    type: "replace",
+    id: pending.id,
+    before: pending.before,
+    after,
+  });
+}
+
+function styleControlTool() {
+  return editor.operations[editor.selectedIndex]?.type || editor.currentTool;
+}
+
+function syncStrokeValueLabel() {
+  const stroke = document.getElementById("stroke");
+  const strokeValue = document.getElementById("strokeValue");
+  if (!stroke || !strokeValue) return;
+
+  const rawValue = Number(stroke.value);
+  const tool = styleControlTool();
+  const value = tool === "pixelate" ? Math.max(6, rawValue * 4) : rawValue;
+  strokeValue.textContent = `${value} px`;
+}
+
+function syncStyleControlVisibility() {
+  const colorControl = document.getElementById("colorControl");
+  const colorSwatches = document.getElementById("colorSwatches");
+  const strokeControl = document.getElementById("strokeControl");
+  const strokeLabel = document.getElementById("strokeLabel");
+  const textSizeControl = document.getElementById("textSizeControl");
+  if (!colorControl || !strokeControl || !textSizeControl) return;
+
+  const tool = styleControlTool();
+  const showColor = ["arrow", "rect", "pen", "text", "step"].includes(tool);
+  const showStroke = ["arrow", "rect", "pen", "pixelate", "blur"].includes(tool);
+  const showTextSize = ["text", "step"].includes(tool);
+
+  colorControl.hidden = !showColor;
+  if (colorSwatches) colorSwatches.hidden = !showColor;
+  strokeControl.hidden = !showStroke;
+  textSizeControl.hidden = !showTextSize;
+  if (strokeLabel) {
+    strokeLabel.textContent =
+      tool === "pixelate" ? "Block size" : tool === "blur" ? "Blur" : "Stroke";
+  }
+  syncStrokeValueLabel();
+}
+
+function clampZoom(value) {
+  return Math.min(4, Math.max(0.08, value));
+}
+
+function layoutCssBackground(background) {
+  if (background === "plain") return "#f4f6f8";
+  if (background === "dark") return "linear-gradient(135deg, #151922, #343947)";
+  if (background === "blue") return "linear-gradient(135deg, #d7f1ff, #7aa7ff)";
+  if (background === "sunset") return "linear-gradient(135deg, #ffd7a8, #ff8fb3 55%, #8aa7ff)";
+  return "linear-gradient(135deg, #eef3f8, #d5dde8)";
+}
+
+function applyLayoutPreview() {
+  const shell = document.getElementById("canvasShell");
+  if (!shell || !editor.canvas) return;
+
+  if (!editor.layout.enabled) {
+    shell.style.padding = "";
+    shell.style.background = "";
+    shell.style.boxShadow = "";
+    shell.style.borderRadius = "";
+    if (editor.baseDisplayCanvas) editor.baseDisplayCanvas.style.borderRadius = "";
+    editor.canvas.style.borderRadius = "";
+    return;
+  }
+
+  const scaledPadding = Math.round(editor.layout.padding * editor.zoom);
+  const scaledRadius = Math.round(editor.layout.radius * editor.zoom);
+  shell.style.padding = `${scaledPadding}px`;
+  shell.style.background = layoutCssBackground(editor.layout.background);
+  shell.style.boxShadow =
+    editor.layout.shadow > 0
+      ? `0 ${Math.round(editor.layout.shadow * editor.zoom * 0.45)}px ${Math.round(
+          editor.layout.shadow * editor.zoom
+        )}px rgba(0, 0, 0, 0.32)`
+      : "none";
+  shell.style.borderRadius = `${Math.max(8, scaledRadius + scaledPadding)}px`;
+  if (editor.baseDisplayCanvas) editor.baseDisplayCanvas.style.borderRadius = `${scaledRadius}px`;
+  editor.canvas.style.borderRadius = `${scaledRadius}px`;
+}
+
+function fitZoom() {
+  const stage = document.querySelector(".stage");
+  if (!stage || !editor.canvas) return 1;
+
+  const style = getComputedStyle(stage);
+  const horizontalPadding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+  const available = Math.max(120, stage.clientWidth - horizontalPadding);
+  const layoutWidth = editor.layout.enabled ? editor.layout.padding * 2 : 0;
+  return clampZoom(Math.min(1, available / (editor.baseCanvas.width + layoutWidth)));
+}
+
+function zoomLabel(value, mode = editor.zoomMode) {
+  if (mode === "fit") return "Fit";
+  return `${Math.round(value * 100)}%`;
+}
+
+function applyZoom(value, mode = "custom") {
+  if (!editor.canvas) return;
+
+  const next = clampZoom(value);
+  editor.zoom = next;
+  editor.zoomMode = mode;
+  const displayWidth = Math.round(editor.baseCanvas.width * next);
+  setCanvasCssWidth(editor.baseDisplayCanvas, displayWidth);
+  setCanvasCssWidth(editor.canvas, displayWidth);
+  applyLayoutPreview();
+
+  const zoomValue = document.getElementById("zoomValue");
+  if (zoomValue) zoomValue.textContent = zoomLabel(next, mode);
+  requestAnimationFrame(syncMiniToolbar);
+}
+
+function setupZoomControls() {
+  const controls = document.getElementById("zoomControls");
+  const zoomOut = document.getElementById("zoomOut");
+  const zoomIn = document.getElementById("zoomIn");
+  const zoomFit = document.getElementById("zoomFit");
+  const zoomActual = document.getElementById("zoomActual");
+  if (!controls || !zoomOut || !zoomIn || !zoomFit || !zoomActual) return;
+
+  controls.hidden = false;
+  zoomOut.addEventListener("click", () => applyZoom(editor.zoom / 1.2));
+  zoomIn.addEventListener("click", () => applyZoom(editor.zoom * 1.2));
+  zoomFit.addEventListener("click", () => applyZoom(fitZoom(), "fit"));
+  zoomActual.addEventListener("click", () => applyZoom(1, "actual"));
+  window.addEventListener("resize", () => {
+    if (editor.zoomMode === "fit") applyZoom(fitZoom(), "fit");
+  });
+
+  requestAnimationFrame(() => applyZoom(fitZoom(), "fit"));
+}
+
+function loadProjectState(project) {
+  if (!project) return;
+
+  if (project.baseDataUrl) editor.projectBaseDataUrl = project.baseDataUrl;
+  if (project.layout) {
+    editor.layout = {
+      ...editor.layout,
+      ...project.layout,
+    };
+  }
+  if (Array.isArray(project.operations)) {
+    editor.operations = project.operations.map((operation) => ensureOperationId(cloneOperation(operation)));
+    editor.nextOperationId =
+      editor.operations.reduce((max, operation) => Math.max(max, operation.id || 0), 0) + 1;
+    editor.selectedIndex = -1;
+  }
+}
+
+function renderAnnotatedCanvas() {
   const canvas = document.createElement("canvas");
   canvas.width = editor.baseCanvas.width;
   canvas.height = editor.baseCanvas.height;
@@ -819,7 +1561,107 @@ function renderFinalCanvas() {
   return canvas;
 }
 
-async function refreshExports(baseName) {
+function roundRectPath(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function fillPresentationBackground(ctx, width, height, background) {
+  if (background === "plain") {
+    ctx.fillStyle = "#f4f6f8";
+  } else if (background === "dark") {
+    const gradient = ctx.createLinearGradient(0, 0, width, height);
+    gradient.addColorStop(0, "#151922");
+    gradient.addColorStop(1, "#343947");
+    ctx.fillStyle = gradient;
+  } else if (background === "blue") {
+    const gradient = ctx.createLinearGradient(0, 0, width, height);
+    gradient.addColorStop(0, "#d7f1ff");
+    gradient.addColorStop(1, "#7aa7ff");
+    ctx.fillStyle = gradient;
+  } else if (background === "sunset") {
+    const gradient = ctx.createLinearGradient(0, 0, width, height);
+    gradient.addColorStop(0, "#ffd7a8");
+    gradient.addColorStop(0.55, "#ff8fb3");
+    gradient.addColorStop(1, "#8aa7ff");
+    ctx.fillStyle = gradient;
+  } else {
+    const gradient = ctx.createLinearGradient(0, 0, width, height);
+    gradient.addColorStop(0, "#eef3f8");
+    gradient.addColorStop(1, "#d5dde8");
+    ctx.fillStyle = gradient;
+  }
+  ctx.fillRect(0, 0, width, height);
+}
+
+function presentationSize(imageWidth, imageHeight) {
+  const padding = editor.layout.padding;
+  const minWidth = imageWidth + padding * 2;
+  const minHeight = imageHeight + padding * 2;
+  const aspectMap = {
+    square: 1,
+    "4:3": 4 / 3,
+    "16:9": 16 / 9,
+  };
+  const ratio = aspectMap[editor.layout.aspect];
+
+  if (!ratio) return { width: minWidth, height: minHeight };
+
+  let width = minWidth;
+  let height = Math.round(width / ratio);
+  if (height < minHeight) {
+    height = minHeight;
+    width = Math.round(height * ratio);
+  }
+  return { width, height };
+}
+
+function renderFinalCanvas() {
+  const screenshot = renderAnnotatedCanvas();
+  if (!editor.layout.enabled) return screenshot;
+
+  const { width, height } = presentationSize(screenshot.width, screenshot.height);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  fillPresentationBackground(ctx, width, height, editor.layout.background);
+
+  const x = Math.round((width - screenshot.width) / 2);
+  const y = Math.round((height - screenshot.height) / 2);
+  const radius = editor.layout.radius;
+
+  ctx.save();
+  if (editor.layout.shadow > 0) {
+    ctx.shadowColor = "rgba(25, 31, 42, 0.34)";
+    ctx.shadowBlur = editor.layout.shadow;
+    ctx.shadowOffsetY = Math.round(editor.layout.shadow * 0.28);
+  }
+  roundRectPath(ctx, x, y, screenshot.width, screenshot.height, radius);
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  roundRectPath(ctx, x, y, screenshot.width, screenshot.height, radius);
+  ctx.clip();
+  ctx.drawImage(screenshot, x, y);
+  ctx.restore();
+
+  return canvas;
+}
+
+async function refreshExports(baseName, options = {}) {
   const version = ++editor.exportVersion;
   const png = document.getElementById("downloadPng");
   const jpeg = document.getElementById("downloadJpeg");
@@ -844,23 +1686,104 @@ async function refreshExports(baseName) {
   setDownload(png, pngBlob, `${baseName}.png`);
   setDownload(jpeg, jpegBlob, `${baseName}.jpg`);
   setDownload(pdf, pdfBlob, `${baseName}.pdf`);
+  for (const anchor of [png, jpeg, pdf]) anchor.dataset.exportReady = "1";
+  editor.exportDirty = false;
+  editor.exportBaseName = baseName;
+  if (!options.quiet) showExportStatus("Updated", "done");
+  if (!options.skipHistory) {
+    await saveRenderedProjectToHistory(outputCanvas);
+  }
+}
+
+async function ensureFreshExports(baseName) {
+  const png = document.getElementById("downloadPng");
+  if (!editor.exportDirty && png?.dataset.exportReady === "1") return;
+  showExportStatus("Updating...");
+  await refreshExports(baseName);
 }
 
 function setupDownloadActions(baseName) {
   for (const id of ["downloadPng", "downloadJpeg", "downloadPdf"]) {
     const anchor = document.getElementById(id);
     anchor.addEventListener("click", async (event) => {
-      if (!editor.activeTextInput) return;
+      finalizeStyleEdit();
+      if (editor.activeTextInput) editor.activeTextInput.finish(true);
+      if (!editor.exportDirty && anchor.dataset.exportReady === "1") return;
       event.preventDefault();
-      editor.activeTextInput.finish(true);
-      await refreshExports(baseName);
+      await ensureFreshExports(baseName);
       anchor.click();
     });
+    anchor.addEventListener("click", () => pulseFeedback(anchor));
   }
+}
+
+function syncLayoutControlValues() {
+  const controls = document.getElementById("layoutControls");
+  const enabled = document.getElementById("layoutEnabled");
+  const background = document.getElementById("layoutBackground");
+  const aspect = document.getElementById("layoutAspect");
+  const padding = document.getElementById("layoutPadding");
+  const paddingValue = document.getElementById("layoutPaddingValue");
+  const radius = document.getElementById("layoutRadius");
+  const radiusValue = document.getElementById("layoutRadiusValue");
+  const shadow = document.getElementById("layoutShadow");
+  const shadowValue = document.getElementById("layoutShadowValue");
+  if (!enabled || !background || !aspect || !padding || !radius || !shadow) return;
+
+  enabled.checked = Boolean(editor.layout.enabled);
+  if (controls) controls.hidden = !enabled.checked;
+  background.value = editor.layout.background;
+  aspect.value = editor.layout.aspect;
+  padding.value = String(editor.layout.padding);
+  radius.value = String(editor.layout.radius);
+  shadow.value = String(editor.layout.shadow);
+  if (paddingValue) paddingValue.textContent = `${editor.layout.padding} px`;
+  if (radiusValue) radiusValue.textContent = `${editor.layout.radius} px`;
+  if (shadowValue) shadowValue.textContent = `${editor.layout.shadow} px`;
+}
+
+function setupLayoutControls(baseName) {
+  const controls = document.getElementById("layoutControls");
+  const enabled = document.getElementById("layoutEnabled");
+  const background = document.getElementById("layoutBackground");
+  const aspect = document.getElementById("layoutAspect");
+  const padding = document.getElementById("layoutPadding");
+  const paddingValue = document.getElementById("layoutPaddingValue");
+  const radius = document.getElementById("layoutRadius");
+  const radiusValue = document.getElementById("layoutRadiusValue");
+  const shadow = document.getElementById("layoutShadow");
+  const shadowValue = document.getElementById("layoutShadowValue");
+  if (!enabled || !background || !aspect || !padding || !radius || !shadow) return;
+
+  function refreshLayout() {
+    editor.layout = {
+      enabled: enabled.checked,
+      background: background.value,
+      aspect: aspect.value,
+      padding: Number(padding.value),
+      radius: Number(radius.value),
+      shadow: Number(shadow.value),
+    };
+    if (controls) controls.hidden = !editor.layout.enabled;
+    if (paddingValue) paddingValue.textContent = `${editor.layout.padding} px`;
+    if (radiusValue) radiusValue.textContent = `${editor.layout.radius} px`;
+    if (shadowValue) shadowValue.textContent = `${editor.layout.shadow} px`;
+    applyLayoutPreview();
+    scheduleExportRefresh(baseName);
+  }
+
+  syncLayoutControlValues();
+  enabled.addEventListener("change", refreshLayout);
+  background.addEventListener("change", refreshLayout);
+  aspect.addEventListener("change", refreshLayout);
+  padding.addEventListener("input", refreshLayout);
+  radius.addEventListener("input", refreshLayout);
+  shadow.addEventListener("input", refreshLayout);
 }
 
 function setupAnnotationControls(baseName) {
   const toolButtons = Array.from(document.querySelectorAll("[data-tool]"));
+  const miniColorButtons = Array.from(document.querySelectorAll("[data-mini-color]"));
   const toolHint = document.getElementById("toolHint");
   const color = document.getElementById("color");
   const swatches = Array.from(document.querySelectorAll("[data-color]"));
@@ -868,38 +1791,40 @@ function setupAnnotationControls(baseName) {
   const strokeValue = document.getElementById("strokeValue");
   const textSize = document.getElementById("textSize");
   const textSizeValue = document.getElementById("textSizeValue");
+  editor.canvas.dataset.currentTool = editor.currentTool;
+
+  function syncToolSurface() {
+    if (toolHint) toolHint.textContent = toolHints[editor.currentTool];
+  }
+
+  function selectTool(tool) {
+    const button = toolButtons.find((item) => item.dataset.tool === tool);
+    if (!button) return;
+
+    finalizeStyleEdit();
+    if (editor.activeTextInput) editor.activeTextInput.finish(true);
+    editor.currentTool = tool;
+    editor.selectedIndex = -1;
+    editor.canvas.dataset.currentTool = editor.currentTool;
+    if (tool === "redact") setCurrentColor("#111111");
+    toolButtons.forEach((item) => item.classList.toggle("active", item === button));
+    pulseFeedback(button);
+    syncToolSurface();
+    redraw();
+    syncStyleControlVisibility();
+    renderStylePreview();
+  }
 
   toolButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      if (editor.activeTextInput) editor.activeTextInput.finish(true);
-      editor.currentTool = button.dataset.tool;
-      toolButtons.forEach((item) => item.classList.toggle("active", item === button));
-      toolHint.textContent = toolHints[editor.currentTool];
-      renderStylePreview();
-    });
+    button.addEventListener("click", () => selectTool(button.dataset.tool));
   });
 
   function syncSwatches() {
-    swatches.forEach((swatch) => {
-      swatch.classList.toggle(
-        "active",
-        swatch.dataset.color.toLowerCase() === color.value.toLowerCase()
-      );
-    });
+    syncSwatchesForColor();
   }
 
   function loadSelectedStyle(operation) {
-    if (operation.color) color.value = operation.color;
-    if (operation.strokeWidth) {
-      stroke.value = String(operation.strokeWidth);
-      strokeValue.textContent = stroke.value;
-    }
-    if (operation.textSize) {
-      textSize.value = String(operation.textSize);
-      textSizeValue.textContent = textSize.value;
-    }
-    syncSwatches();
-    renderStylePreview();
+    loadOperationStyle(operation);
   }
 
   function updateSelectedStyle() {
@@ -908,69 +1833,184 @@ function setupAnnotationControls(baseName) {
     if (!operation) return;
 
     const style = currentStyle();
-    if ("color" in operation) operation.color = style.color;
-    if ("strokeWidth" in operation) operation.strokeWidth = style.strokeWidth;
-    if ("textSize" in operation) operation.textSize = style.textSize;
+    if (["arrow", "rect", "pen", "text", "step"].includes(operation.type)) {
+      operation.color = style.color;
+    }
+    if (["arrow", "rect", "pen", "pixelate", "blur"].includes(operation.type)) {
+      operation.strokeWidth = style.strokeWidth;
+    }
+    if (["text", "step"].includes(operation.type)) operation.textSize = style.textSize;
     if (operation.type === "step") operation.radius = Math.max(36, style.textSize * 1.24);
     redraw();
     scheduleExportRefresh(baseName);
   }
 
+  function applyColor(value) {
+    beginStyleEdit();
+    setCurrentColor(value);
+    if (editor.activeTextInput) editor.activeTextInput.syncStyle();
+    updateSelectedStyle();
+    finalizeStyleEdit();
+    renderStylePreview();
+  }
+
+  miniColorButtons.forEach((button) => {
+    button.addEventListener("click", () => applyColor(button.dataset.miniColor));
+  });
+
   swatches.forEach((swatch) => {
     swatch.addEventListener("click", () => {
+      beginStyleEdit();
       color.value = swatch.dataset.color;
       syncSwatches();
+      syncColorButtons(color.value);
       if (editor.activeTextInput) editor.activeTextInput.syncStyle();
       updateSelectedStyle();
+      finalizeStyleEdit();
       renderStylePreview();
     });
   });
   color.addEventListener("input", () => {
+    beginStyleEdit();
     syncSwatches();
+    syncColorButtons(color.value);
     if (editor.activeTextInput) editor.activeTextInput.syncStyle();
     updateSelectedStyle();
     renderStylePreview();
   });
+  color.addEventListener("change", finalizeStyleEdit);
+  color.addEventListener("blur", finalizeStyleEdit);
 
   stroke.addEventListener("input", () => {
-    strokeValue.textContent = stroke.value;
+    beginStyleEdit();
+    syncStrokeValueLabel();
     if (editor.activeTextInput) editor.activeTextInput.syncStyle();
     updateSelectedStyle();
     renderStylePreview();
   });
+  stroke.addEventListener("change", finalizeStyleEdit);
+  stroke.addEventListener("blur", finalizeStyleEdit);
   textSize.addEventListener("input", () => {
-    textSizeValue.textContent = textSize.value;
+    beginStyleEdit();
+    textSizeValue.textContent = `${textSize.value} px`;
     if (editor.activeTextInput) editor.activeTextInput.syncStyle();
     updateSelectedStyle();
     renderStylePreview();
   });
+  textSize.addEventListener("change", finalizeStyleEdit);
+  textSize.addEventListener("blur", finalizeStyleEdit);
 
-  document.getElementById("undo").addEventListener("click", () => {
+  function undoOperation() {
+    finalizeStyleEdit();
     if (editor.activeTextInput) editor.activeTextInput.finish(false);
-    const operation = editor.operations.pop();
-    if (operation) editor.redoStack.push(operation);
-    editor.selectedIndex = editor.operations.length - 1;
-    redraw();
-    scheduleExportRefresh(baseName);
-  });
+    const action = editor.undoStack.pop();
+    if (!action) return;
+    applyUndoAction(action);
+    editor.redoStack.push(action);
+    syncAfterHistoryChange(baseName);
+  }
 
-  document.getElementById("redo").addEventListener("click", () => {
+  function redoOperation() {
+    finalizeStyleEdit();
     if (editor.activeTextInput) editor.activeTextInput.finish(false);
-    const operation = editor.redoStack.pop();
-    if (!operation) return;
-    editor.operations.push(operation);
-    editor.selectedIndex = editor.operations.length - 1;
-    redraw();
-    scheduleExportRefresh(baseName);
-  });
+    const action = editor.redoStack.pop();
+    if (!action) return;
+    applyRedoAction(action);
+    editor.undoStack.push(action);
+    syncAfterHistoryChange(baseName);
+  }
 
-  document.getElementById("clear").addEventListener("click", () => {
+  function clearAnnotations() {
+    finalizeStyleEdit();
+    if (editor.operations.length === 0) return;
+    if (!confirm("Clear all annotations from this screenshot?")) return;
     if (editor.activeTextInput) editor.activeTextInput.finish(false);
+    const operations = editor.operations.map(cloneOperation);
     editor.operations = [];
-    editor.redoStack = [];
     editor.selectedIndex = -1;
+    commitUndoAction({ type: "clear", operations });
     redraw();
+    syncEditActionState();
+    syncStyleControlVisibility();
+    renderStylePreview();
     scheduleExportRefresh(baseName);
+  }
+
+  function deleteSelectedOperation() {
+    finalizeStyleEdit();
+    if (editor.selectedIndex < 0) return;
+    if (editor.activeTextInput) editor.activeTextInput.finish(false);
+    const index = editor.selectedIndex;
+    const operation = cloneOperation(editor.operations[index]);
+    editor.operations.splice(index, 1);
+    editor.selectedIndex = -1;
+    commitUndoAction({ type: "remove", operation, index });
+    redraw();
+    syncEditActionState();
+    syncStyleControlVisibility();
+    renderStylePreview();
+    scheduleExportRefresh(baseName);
+  }
+
+  function duplicateSelectedOperation() {
+    finalizeStyleEdit();
+    const operation = editor.operations[editor.selectedIndex];
+    if (!operation) return;
+    const duplicate = cloneOperation(operation);
+    delete duplicate.id;
+    moveOperation(duplicate, 24, 24);
+    pushOperation(duplicate, baseName);
+  }
+
+  document.getElementById("undo").addEventListener("click", undoOperation);
+  document.getElementById("redo").addEventListener("click", redoOperation);
+  document.getElementById("clear").addEventListener("click", clearAnnotations);
+  document.getElementById("deleteSelected").addEventListener("click", deleteSelectedOperation);
+  document.getElementById("duplicateSelected").addEventListener("click", duplicateSelectedOperation);
+
+  document.addEventListener("keydown", (event) => {
+    const target = event.target;
+    const isTextEntry =
+      target?.isContentEditable ||
+      ["INPUT", "TEXTAREA", "SELECT"].includes(target?.tagName || "");
+    const key = event.key.toLowerCase();
+    const hasModifier = event.metaKey || event.ctrlKey;
+
+    if (isTextEntry && event.key !== "Escape") return;
+
+    if (hasModifier && key === "z") {
+      event.preventDefault();
+      if (event.shiftKey) {
+        redoOperation();
+      } else {
+        undoOperation();
+      }
+      return;
+    }
+
+    if (hasModifier && key === "y") {
+      event.preventDefault();
+      redoOperation();
+      return;
+    }
+
+    if (event.key === "Escape") {
+      finalizeStyleEdit();
+      if (editor.activeTextInput) editor.activeTextInput.finish(false);
+      editor.selectedIndex = -1;
+      editor.interaction = null;
+      editor.draft = null;
+      editor.dragStart = null;
+      redraw();
+      syncStyleControlVisibility();
+      renderStylePreview();
+      return;
+    }
+
+    if (!hasModifier && !event.altKey && !event.shiftKey && shortcutToolMap[key]) {
+      event.preventDefault();
+      selectTool(shortcutToolMap[key]);
+    }
   });
 
   editor.canvas.addEventListener("pointerdown", (event) => {
@@ -979,6 +2019,7 @@ function setupAnnotationControls(baseName) {
     const handle = selected ? handleAtPoint(selected, point) : null;
     if (selected && handle) {
       event.preventDefault();
+      finalizeStyleEdit();
       if (editor.activeTextInput) editor.activeTextInput.finish(true);
       editor.interaction = {
         type: "resize",
@@ -993,10 +2034,12 @@ function setupAnnotationControls(baseName) {
     const hitIndex = operationAtPoint(point);
     if (hitIndex >= 0) {
       event.preventDefault();
+      finalizeStyleEdit();
       if (editor.activeTextInput) editor.activeTextInput.finish(true);
       editor.selectedIndex = hitIndex;
       loadSelectedStyle(editor.operations[hitIndex]);
       redraw();
+      syncStyleControlVisibility();
       editor.interaction = {
         type: "move",
         lastPoint: point,
@@ -1008,14 +2051,18 @@ function setupAnnotationControls(baseName) {
 
     if (editor.currentTool === "text") {
       event.preventDefault();
+      finalizeStyleEdit();
       editor.selectedIndex = -1;
+      syncStyleControlVisibility();
       openTextEditor(point, baseName);
       return;
     }
     if (editor.currentTool === "step") {
       event.preventDefault();
+      finalizeStyleEdit();
       if (editor.activeTextInput) editor.activeTextInput.finish(true);
       editor.selectedIndex = -1;
+      syncStyleControlVisibility();
       pushOperation(
         {
           type: "step",
@@ -1031,8 +2078,10 @@ function setupAnnotationControls(baseName) {
     }
 
     if (editor.activeTextInput) editor.activeTextInput.finish(true);
+    finalizeStyleEdit();
     event.preventDefault();
     editor.selectedIndex = -1;
+    syncStyleControlVisibility();
     editor.dragStart = point;
     editor.canvas.setPointerCapture(event.pointerId);
     if (editor.currentTool === "pen") {
@@ -1064,7 +2113,7 @@ function setupAnnotationControls(baseName) {
           point
         );
       }
-      redraw();
+      requestRedraw();
       return;
     }
 
@@ -1076,7 +2125,7 @@ function setupAnnotationControls(baseName) {
     } else {
       editor.draft = makeDragOperation(editor.currentTool, editor.dragStart, point);
     }
-    redraw(editor.draft);
+    requestRedraw(editor.draft);
   });
 
   editor.canvas.addEventListener("pointerup", (event) => {
@@ -1086,7 +2135,11 @@ function setupAnnotationControls(baseName) {
     editor.draft = null;
     editor.dragStart = null;
     if (operationIsLargeEnough(operation)) {
-      pushOperation(operation, baseName);
+      if (operation.type === "crop") {
+        cropToRect(operation.rect, baseName);
+      } else {
+        pushOperation(operation, baseName);
+      }
     } else {
       redraw();
     }
@@ -1095,9 +2148,21 @@ function setupAnnotationControls(baseName) {
   editor.canvas.addEventListener("pointerup", (event) => {
     if (!editor.interaction) return;
     event.preventDefault();
+    const operation = editor.operations[editor.selectedIndex];
+    const before = editor.interaction.startOperation;
     editor.interaction = null;
-    editor.redoStack = [];
+    if (operation && before && !sameOperation(before, operation)) {
+      commitUndoAction({
+        type: "replace",
+        id: operation.id,
+        before,
+        after: cloneOperation(operation),
+      });
+    }
     redraw();
+    syncEditActionState();
+    syncStyleControlVisibility();
+    renderStylePreview();
     scheduleExportRefresh(baseName);
   });
 
@@ -1106,9 +2171,16 @@ function setupAnnotationControls(baseName) {
     editor.dragStart = null;
     editor.interaction = null;
     redraw();
+    syncStyleControlVisibility();
+    renderStylePreview();
   });
 
+  setCurrentStyle(defaultStyle);
+  syncToolSurface();
   renderStylePreview();
+  syncEditActionState();
+  syncStyleControlVisibility();
+  editor.annotateMode = true;
 }
 
 async function setupCopyButton() {
@@ -1116,19 +2188,30 @@ async function setupCopyButton() {
   copy.addEventListener("click", async () => {
     copy.disabled = true;
     try {
+      finalizeStyleEdit();
       if (editor.activeTextInput) editor.activeTextInput.finish(true);
-      const pngBlob = await canvasToBlob(renderFinalCanvas(), "image/png");
+      const outputCanvas = renderFinalCanvas();
+      const pngBlob = await canvasToBlob(outputCanvas, "image/png");
       await navigator.clipboard.write([
         new ClipboardItem({ [pngBlob.type]: pngBlob }),
       ]);
-      copy.textContent = "Copied";
+      await saveRenderedProjectToHistory(outputCanvas);
+      setButtonLabel(copy, "copy", "Copied");
+      pulseFeedback(copy);
     } catch (err) {
       console.error("Copy failed:", err);
-      copy.textContent = "Copy failed";
+      setButtonLabel(copy, "copy", "Use PNG");
+      const png = document.getElementById("downloadPng");
+      if (png) {
+        pulseFeedback(png);
+        png.focus();
+      }
+      pulseFeedback(copy);
     } finally {
       setTimeout(() => {
         copy.disabled = false;
-        copy.textContent = "Copy";
+        copy.classList.remove("feedback");
+        setButtonLabel(copy, "copy", "Copy");
       }, 1500);
     }
   });
@@ -1141,11 +2224,13 @@ async function setupUploadButton() {
     upload.disabled = true;
     upload.classList.remove("danger");
     upload.classList.add("success");
-    upload.textContent = "Uploading...";
+    setButtonLabel(upload, "upload", "Uploading...");
 
     try {
+      finalizeStyleEdit();
       if (editor.activeTextInput) editor.activeTextInput.finish(true);
-      const pngBlob = await canvasToBlob(renderFinalCanvas(), "image/png");
+      const outputCanvas = renderFinalCanvas();
+      const pngBlob = await canvasToBlob(outputCanvas, "image/png");
       const form = new FormData();
       form.append("files[]", pngBlob, `${editor.baseName}.png`);
       const controller = new AbortController();
@@ -1172,28 +2257,43 @@ async function setupUploadButton() {
       }
 
       if (!response.ok) {
-        throw new Error(text || `Upload failed with HTTP ${response.status}.`);
+        const error = new Error(text || `Upload failed with HTTP ${response.status}.`);
+        error.uiLabel = `HTTP ${response.status}`;
+        throw error;
       }
       if (!/^https:\/\/\S+\.uguu\.se\/\S+/.test(url)) {
-        throw new Error(text || "Upload did not return a valid image URL.");
+        const error = new Error(text || "Upload did not return a valid image URL.");
+        error.uiLabel = "Invalid response";
+        throw error;
       }
 
-      await navigator.clipboard.writeText(url);
-      upload.textContent = "URL copied";
+      try {
+        await navigator.clipboard.writeText(url);
+      } catch (err) {
+        err.uiLabel = "Copy failed";
+        throw err;
+      }
+      await saveRenderedProjectToHistory(outputCanvas);
+      await saveUploadToHistory(url);
+      setButtonLabel(upload, "upload", "URL copied");
+      pulseFeedback(upload);
     } catch (err) {
       if (err.name === "AbortError") {
-        err = new Error("Upload timed out. Uguu may be slow or unavailable.");
+        err.uiLabel = "Timed out";
       }
       console.error("Upload failed:", err);
       upload.classList.remove("success");
       upload.classList.add("danger");
-      upload.textContent = "Upload failed";
+      const label = err.uiLabel || (err.name === "TypeError" ? "Network failed" : "Upload failed");
+      setButtonLabel(upload, "upload", label);
+      pulseFeedback(upload);
     } finally {
       setTimeout(() => {
         upload.disabled = false;
+        upload.classList.remove("feedback");
         upload.classList.remove("danger");
         upload.classList.add("success");
-        upload.textContent = defaultLabel;
+        setButtonLabel(upload, "upload", defaultLabel);
       }, 1800);
     }
   });
@@ -1209,11 +2309,16 @@ async function autoSaveHistory(capture) {
     "historyLimit",
   ]);
   const limit = normalizeHistoryLimit(historyLimit);
-  const outputCanvas = renderFinalCanvas();
+  const outputCanvas =
+    editor.operations.length || editor.layout.enabled ? renderFinalCanvas() : editor.baseCanvas;
+  const dataUrl = outputCanvas.toDataURL("image/png");
+  if (outputCanvas === editor.baseCanvas) editor.projectBaseDataUrl = dataUrl;
   history.unshift({
     baseName: editor.baseName,
-    dataUrl: outputCanvas.toDataURL("image/png"),
+    dataUrl,
     height: outputCanvas.height,
+    mode: capture.mode || "fullPage",
+    project: cloneProject(),
     savedAt: Date.now(),
     title: capture.pageTitle || "Screenshot",
     url: capture.pageUrl || "",
@@ -1223,12 +2328,74 @@ async function autoSaveHistory(capture) {
     history: history.slice(0, limit),
     historyLimit: limit,
   });
+  editor.historyReady = true;
+}
+
+async function saveProjectToHistory() {
+  if (!editor.historyReady || !editor.baseName || !editor.baseCanvas) return;
+
+  const { history = [] } = await chrome.storage.local.get("history");
+  const index = history.findIndex((entry) => entry.baseName === editor.baseName);
+  if (index < 0) return;
+
+  history[index] = {
+    ...history[index],
+    project: cloneProject(),
+    updatedAt: Date.now(),
+  };
+  await chrome.storage.local.set({ history });
+}
+
+async function saveRenderedProjectToHistory(outputCanvas) {
+  if (!editor.historyReady || !editor.baseName || !editor.baseCanvas || !outputCanvas) return;
+
+  const { history = [] } = await chrome.storage.local.get("history");
+  const index = history.findIndex((entry) => entry.baseName === editor.baseName);
+  if (index < 0) return;
+
+  history[index] = {
+    ...history[index],
+    dataUrl: outputCanvas.toDataURL("image/png"),
+    height: outputCanvas.height,
+    project: cloneProject(),
+    updatedAt: Date.now(),
+    width: outputCanvas.width,
+  };
+  await chrome.storage.local.set({ history });
+}
+
+function scheduleProjectHistorySave() {
+  if (!editor.historyReady) return;
+
+  clearTimeout(editor.historySaveTimer);
+  editor.historySaveTimer = setTimeout(() => {
+    saveProjectToHistory().catch((err) => {
+      console.warn("Unable to save editable screenshot project:", err);
+    });
+  }, 450);
+}
+
+async function saveUploadToHistory(url) {
+  const { history = [] } = await chrome.storage.local.get("history");
+  const uploadedAt = Date.now();
+  const uploadExpiresAt = uploadedAt + 3 * 60 * 60 * 1000;
+  const index = history.findIndex((entry) => entry.baseName === editor.baseName);
+  if (index < 0) return;
+
+  history[index] = {
+    ...history[index],
+    uploadedAt,
+    uploadExpiresAt,
+    uploadUrl: url,
+  };
+  await chrome.storage.local.set({ history });
 }
 
 async function main() {
   const status = document.getElementById("status");
   const { capture } = await chrome.storage.local.get("capture");
   if (!capture) {
+    status.classList.remove("loading");
     status.textContent =
       "No capture found. Click the extension button on a page first.";
     return;
@@ -1238,30 +2405,46 @@ async function main() {
   document.getElementById("title").textContent = pageTitle || "Screenshot";
   document.title = `Screenshot - ${pageTitle || ""}`;
 
+  status.textContent = "Loading captured frames";
   const images = await Promise.all(frames.map((f) => loadImage(f.dataUrl)));
+  status.textContent = "Stitching screenshot";
   editor.baseCanvas = drawCapture(capture, images);
+  editor.projectBaseDataUrl = capture.project?.baseDataUrl || "";
+  editor.baseDisplayCanvas = document.getElementById("baseDisplayCanvas");
+  editor.baseDisplayCtx = editor.baseDisplayCanvas.getContext("2d");
   editor.canvas = document.getElementById("editorCanvas");
   editor.ctx = editor.canvas.getContext("2d");
-  editor.canvas.width = editor.baseCanvas.width;
-  editor.canvas.height = editor.baseCanvas.height;
+  syncDisplayCanvases();
+  const baseName = capture.baseName || buildBaseName(capture);
+  editor.baseName = baseName;
+  editor.exportBaseName = baseName;
+  loadProjectState(capture.project);
   redraw();
 
   document.getElementById(
     "dimensions"
-  ).textContent = `${editor.canvas.width} x ${editor.canvas.height}px`;
+  ).textContent = `${editor.baseCanvas.width} x ${editor.baseCanvas.height}px`;
 
-  const baseName = buildBaseName(capture);
-  editor.baseName = baseName;
-  await refreshExports(baseName);
   setupDownloadActions(baseName);
   await setupCopyButton();
   await setupUploadButton();
-  await autoSaveHistory(capture);
+  if (capture.fromHistory) {
+    editor.historyReady = true;
+    await saveProjectToHistory();
+  } else {
+    status.textContent = "Saving to history";
+    await autoSaveHistory(capture);
+  }
+  markExportsStale(baseName, { quiet: true });
+  status.textContent = "Preparing editor";
   setupAnnotationControls(baseName);
+  setupLayoutControls(baseName);
 
   document.getElementById("canvasShell").hidden = false;
   document.getElementById("annotationPanel").hidden = false;
   document.getElementById("actions").hidden = false;
+  setupZoomControls();
+  status.classList.remove("loading");
   status.hidden = true;
 
   // The frames are large; drop them now that the image is rendered.
@@ -1269,5 +2452,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  document.getElementById("status").textContent = `Failed to stitch: ${err}`;
+  const status = document.getElementById("status");
+  status.classList.remove("loading");
+  status.textContent = `Failed to stitch: ${err}`;
 });
