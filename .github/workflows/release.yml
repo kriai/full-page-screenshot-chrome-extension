@@ -2,8 +2,9 @@ name: Package extension
 
 # Builds a Chrome Web Store upload zip when a merge to main actually changes
 # the extension. Docs/metadata-only merges are skipped: no version bump, no
-# release. Bump is minor by default; put [patch] or [major] in the PR title or
-# commit message to override.
+# release. Bump is minor by default; put the patch or major keyword, in square
+# brackets, in a PR title or commit subject line to override. Only subject
+# lines are scanned, so describing the convention in a commit body is safe.
 
 on:
   push:
@@ -87,8 +88,11 @@ jobs:
           BUMP="${{ inputs.bump }}"
           if [ -z "$BUMP" ] || [ "$BUMP" = "auto" ]; then
             RANGE="${{ steps.base.outputs.base }}"
-            if [ -n "$RANGE" ]; then MSGS="$(git log --format=%B "$RANGE"..HEAD)"; else MSGS="$(git log --format=%B)"; fi
-            # Case-insensitive tag anywhere in the merged commit messages.
+            # Subject lines only. Scanning full bodies meant a commit that
+            # merely *described* this convention triggered it - which is how
+            # two accidental major releases got cut. Nobody writes the keyword
+            # in a subject line unless they mean it.
+            if [ -n "$RANGE" ]; then MSGS="$(git log --format=%s "$RANGE"..HEAD)"; else MSGS="$(git log --format=%s)"; fi
             if printf '%s' "$MSGS" | grep -qiF '[major]'; then
               BUMP=major
             elif printf '%s' "$MSGS" | grep -qiF '[patch]'; then
