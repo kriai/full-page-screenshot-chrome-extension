@@ -150,3 +150,33 @@ and attaches them to the capture handed to the viewer.
   the run.
 - `captureVisibleTab` is rate-limited to ~2 calls/sec, so long pages take a
   moment; the toolbar badge shows progress.
+
+## Releasing
+
+Packaging is automated. Merging to `main` runs
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which:
+
+1. Compares the merge against the last `v*` tag to see whether any **shipped
+   extension file** changed. Docs, `store-assets/`, `.github/` and `scripts/`
+   don't count — a README-only merge produces no version bump and no release.
+2. Bumps `manifest.json`: **minor** by default. Put `[patch]` or `[major]`
+   anywhere in the PR title or a commit message to override.
+3. Builds the zip, commits the bump, tags `vX.Y.Z`, and publishes a GitHub
+   Release with the zip attached.
+
+Grab the zip from the [Releases page](../../releases) and upload it at the
+[Chrome Web Store dashboard](https://chrome.google.com/webstore/devconsole).
+
+To build the same zip locally:
+
+```sh
+./scripts/package.sh          # -> fullpage-screenshot-<version>.zip
+./scripts/package.sh --list   # show exactly what would ship
+```
+
+The package is *everything git tracks* minus the excludes listed at the top of
+`scripts/package.sh`, so a new source file ships automatically — nothing to
+register. CI and local builds run the identical script.
+
+You can also trigger a build by hand from the **Actions** tab
+("Package extension" → "Run workflow"), which lets you pick the bump type.

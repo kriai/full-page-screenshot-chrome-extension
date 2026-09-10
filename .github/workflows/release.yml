@@ -1,0 +1,184 @@
+name: Package extension
+
+# Builds a Chrome Web Store upload zip when a merge to main actually changes
+# the extension. Docs/metadata-only merges are skipped: no version bump, no
+# release. Bump is minor by default; put [patch] or [major] in the PR title or
+# commit message to override.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump"
+        required: true
+        default: auto
+        type: choice
+        options: [auto, patch, minor, major]
+      force:
+        description: "Release even if no extension files changed"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: package-extension
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Work out the baseline to compare against
+        id: base
+        run: |
+          # Prefer the last released tag: "has the extension changed since what
+          # we last shipped?" is the right question, and it self-heals if a run
+          # was ever skipped or failed.
+          BASE="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+          if [ -z "$BASE" ]; then
+            BASE="${{ github.event.before }}"
+            case "$BASE" in
+              ''|0000000000000000000000000000000000000000) BASE="" ;;
+            esac
+          fi
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "Baseline: ${BASE:-<none, first release>}"
+
+      - name: Did this merge touch the extension?
+        id: changed
+        run: |
+          CHANGED="$(./scripts/package.sh --changed-since '${{ steps.base.outputs.base }}')"
+          if [ -n "$CHANGED" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            printf 'Extension files changed:\n%s\n' "$CHANGED"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No extension files changed."
+          fi
+          {
+            echo "### Changed extension files"
+            if [ -n "$CHANGED" ]; then printf '```\n%s\n```\n' "$CHANGED"; else echo "_None._"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stop here if only docs or metadata changed
+        id: gate
+        run: |
+          if [ "${{ steps.changed.outputs.changed }}" != "true" ] \
+             && [ "${{ inputs.force }}" != "true" ]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "No extension changes - skipping version bump and release." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Decide the version bump
+        id: bump
+        if: steps.gate.outputs.proceed == 'true'
+        run: |
+          BUMP="${{ inputs.bump }}"
+          if [ -z "$BUMP" ] || [ "$BUMP" = "auto" ]; then
+            RANGE="${{ steps.base.outputs.base }}"
+            if [ -n "$RANGE" ]; then MSGS="$(git log --format=%B "$RANGE"..HEAD)"; else MSGS="$(git log --format=%B)"; fi
+            # Case-insensitive tag anywhere in the merged commit messages.
+            if printf '%s' "$MSGS" | grep -qiF '[major]'; then
+              BUMP=major
+            elif printf '%s' "$MSGS" | grep -qiF '[patch]'; then
+              BUMP=patch
+            else
+              BUMP=minor
+            fi
+          fi
+          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+          echo "Bump: $BUMP"
+
+      - name: Bump the manifest version
+        id: version
+        if: steps.gate.outputs.proceed == 'true'
+        run: |
+          set -euo pipefail
+          CURRENT="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' manifest.json | head -1)"
+          [ -n "$CURRENT" ] || { echo "could not read version from manifest.json" >&2; exit 1; }
+          IFS=. read -r MAJOR MINOR PATCH <<EOF
+          $CURRENT
+          EOF
+          MAJOR="${MAJOR:-0}"; MINOR="${MINOR:-0}"; PATCH="${PATCH:-0}"
+          case "${{ steps.bump.outputs.bump }}" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+          NEW="$MAJOR.$MINOR.$PATCH"
+          # Safe: "manifest_version" has no quote before "version", so it can't match.
+          sed -i 's/"version"[[:space:]]*:[[:space:]]*"[^"]*"/"version": "'"$NEW"'"/' manifest.json
+          python3 -c 'import json,sys; assert json.load(open("manifest.json"))["version"]==sys.argv[1]' "$NEW"
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          echo "Version: $CURRENT -> $NEW"
+
+      - name: Build the package
+        id: build
+        if: steps.gate.outputs.proceed == 'true'
+        run: |
+          ZIP="$(./scripts/package.sh dist)"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$ZIP")" >> "$GITHUB_OUTPUT"
+          unzip -l "$ZIP"
+
+      - name: Commit the version bump
+        if: steps.gate.outputs.proceed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          # [skip ci] is belt-and-braces: pushes made with GITHUB_TOKEN don't
+          # trigger workflows, so this can't loop.
+          git commit -m "Release v${{ steps.version.outputs.version }} [skip ci]"
+          git tag "v${{ steps.version.outputs.version }}"
+          git push origin HEAD:main
+          git push origin "v${{ steps.version.outputs.version }}"
+
+      - name: Publish the release
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RANGE="${{ steps.base.outputs.base }}"
+          if [ -n "$RANGE" ]; then
+            LOG="$(git log --no-merges --format='- %s' "$RANGE"..HEAD~1 || true)"
+          else
+            LOG="$(git log --no-merges --format='- %s' HEAD~1 || true)"
+          fi
+          [ -n "$LOG" ] || LOG="- See commit history."
+          cat > notes.md <<EOF
+          Chrome Web Store package for **v${{ steps.version.outputs.version }}** (was ${{ steps.version.outputs.current }}).
+
+          Download \`${{ steps.build.outputs.name }}\` below and upload it at
+          [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole).
+
+          ## Changes
+          $LOG
+          EOF
+          gh release create "v${{ steps.version.outputs.version }}" \
+            --title "v${{ steps.version.outputs.version }}" \
+            --notes-file notes.md \
+            "${{ steps.build.outputs.zip }}"
+          {
+            echo "### Released v${{ steps.version.outputs.version }}"
+            echo "[Download ${{ steps.build.outputs.name }}](${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.version }})"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.gate.outputs.proceed == 'true'
+        with:
+          name: ${{ steps.build.outputs.name }}
+          path: ${{ steps.build.outputs.zip }}
+          retention-days: 90
