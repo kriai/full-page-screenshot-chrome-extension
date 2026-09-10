@@ -19,6 +19,7 @@ cd "$REPO_ROOT"
 EXCLUDES=(
   ':!:.github/**'
   ':!:scripts/**'
+  ':!:test/**'
   ':!:store-assets/**'
   ':!:*.md'
   ':!:.gitignore'
