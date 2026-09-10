@@ -70,8 +70,10 @@ Packaging is automated. Merging to `main` runs
 1. Compares the merge against the last `v*` tag to see whether any **shipped
    extension file** changed. Docs, `store-assets/`, `.github/` and `scripts/`
    don't count — a README-only merge produces no version bump and no release.
-2. Bumps `manifest.json`: **minor** by default. Put `[patch]` or `[major]`
-   anywhere in the PR title or a commit message to override.
+2. Bumps `manifest.json`: **minor** by default. Put `[patch]` or `[major]` in
+   a PR title or a commit **subject line** to override. Only subject lines are
+   scanned - a commit body that mentions the keyword, such as one documenting
+   this convention, does not trigger it.
 3. Builds the zip, commits the bump, tags `vX.Y.Z`, and publishes a GitHub
    Release with the zip attached.
 
