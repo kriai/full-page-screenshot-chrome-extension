@@ -1,7 +1,5 @@
-// Chrome rate-limits captureVisibleTab to ~2 calls/second, and the page needs
-// time to repaint after each scroll (lazy images, animations settling).
-const CAPTURE_DELAY_MS = 600;
-const CHATGPT_SCROLL_HOSTS = new Set(["chatgpt.com", "chat.openai.com"]);
+// Shared geometry helpers (also used by the viewer and the node tests).
+importScripts("capture-geometry.js");
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== "startCapture") return false;
@@ -18,11 +16,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     sendResponse({ ok: true });
     try {
-      await capturePage(tab, message.mode);
+      await capturePage(tab, message.mode, message.options || {});
     } catch (err) {
-      console.error("Screenshot capture failed:", err);
-      await cleanupCaptureTab(tab.id);
-      setTemporaryErrorBadge(tab.id);
+      if (err?.canceled) {
+        console.info("Screenshot capture canceled:", err.message);
+      } else {
+        console.error("Screenshot capture failed:", err);
+        setTemporaryErrorBadge(tab.id, err?.message);
+      }
+      if (!err?.concurrent) await cleanupCaptureTab(tab.id);
     }
   })().catch((err) => {
     console.error("Unable to start screenshot capture:", err);
@@ -34,11 +36,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function setTemporaryErrorBadge(tabId) {
-  chrome.action.setBadgeText({ text: "ERR", tabId }).catch(() => {});
+function setTemporaryErrorBadge(tabId, message) {
+  updateCaptureBadge(tabId, {
+    text: "ERR",
+    title: message || "Capture failed",
+    color: "#b4232c",
+  }).catch(() => {});
   setTimeout(() => {
-    chrome.action.setBadgeText({ text: "", tabId }).catch(() => {});
-  }, 2200);
+    clearCaptureBadge(tabId).catch(() => {});
+  }, 2600);
 }
 
 async function exec(tabId, func, args = []) {
@@ -50,7 +56,7 @@ async function exec(tabId, func, args = []) {
   return result;
 }
 
-async function capturePage(tab, mode) {
+async function capturePage(tab, mode, options = {}) {
   if (mode === "visible") {
     await captureVisibleArea(tab);
     return;
@@ -59,7 +65,7 @@ async function capturePage(tab, mode) {
     await captureSelectedArea(tab);
     return;
   }
-  await captureFullPage(tab);
+  await captureFullPage(tab, options);
 }
 
 async function getVisibleMetrics(tabId) {
@@ -74,23 +80,17 @@ async function getVisibleMetrics(tabId) {
 
 async function captureVisibleArea(tab) {
   const tabId = tab.id;
-  await chrome.action.setBadgeText({ text: "1/1", tabId });
+  await updateCaptureBadge(tabId, { text: "1/1", title: "Capturing the visible area" });
 
   await updateCaptureProgress(tabId, {
     current: 0,
     total: 1,
-    label: "Preparing visible area",
-    detail: "Checking viewport size",
-  });
-  await sleep(250);
-  await updateCaptureProgress(tabId, {
-    current: 0,
-    total: 1,
     label: "Capturing visible area",
-    detail: "Hiding capture overlay",
+    detail: "Hold still - the overlay steps out of the shot.",
   });
+  await sleep(PANEL_READ_MS);
   await updateCaptureProgress(tabId, { hidden: true });
-  await sleep(80);
+  await sleep(PANEL_FADE_MS);
 
   const metrics = await getVisibleMetrics(tabId);
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
@@ -109,16 +109,16 @@ async function captureVisibleArea(tab) {
     metrics,
     mode: "visible",
   });
-  await chrome.action.setBadgeText({ text: "", tabId });
+  await clearCaptureBadge(tabId);
 }
 
 async function captureSelectedArea(tab) {
   const tabId = tab.id;
-  await chrome.action.setBadgeText({ text: "SEL", tabId });
+  await updateCaptureBadge(tabId, { text: "SEL", title: "Drag to select an area" });
 
   const selection = await exec(tabId, selectViewportArea);
   if (!selection || selection.reason) {
-    await chrome.action.setBadgeText({ text: "", tabId });
+    await clearCaptureBadge(tabId);
     if (selection?.reason) {
       await exec(tabId, showSelectionFeedback, [
         selection.reason === "too-small" ? "Selection too small" : "Selection canceled",
@@ -127,22 +127,16 @@ async function captureSelectedArea(tab) {
     return;
   }
 
-  await chrome.action.setBadgeText({ text: "1/1", tabId });
-  await updateCaptureProgress(tabId, {
-    current: 0,
-    total: 1,
-    label: "Preparing selected area",
-    detail: "Using selected region",
-  });
-  await sleep(250);
+  await updateCaptureBadge(tabId, { text: "1/1", title: "Capturing the selected area" });
   await updateCaptureProgress(tabId, {
     current: 0,
     total: 1,
     label: "Capturing selected area",
-    detail: "Hiding capture overlay",
+    detail: "Hold still - the overlay steps out of the shot.",
   });
+  await sleep(PANEL_READ_MS);
   await updateCaptureProgress(tabId, { hidden: true });
-  await sleep(80);
+  await sleep(PANEL_FADE_MS);
   const metrics = await getVisibleMetrics(tabId);
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
     format: "png",
@@ -161,7 +155,7 @@ async function captureSelectedArea(tab) {
     metrics,
     mode: "selection",
   });
-  await chrome.action.setBadgeText({ text: "", tabId });
+  await clearCaptureBadge(tabId);
 }
 
 function selectViewportArea() {
@@ -303,6 +297,23 @@ function showSelectionFeedback(message) {
   setTimeout(() => toast.remove(), 1400);
 }
 
+// Toolbar surface: the only progress indicator that never lands in a
+// screenshot, so it carries the frame loop while the on-page panel is hidden.
+async function updateCaptureBadge(tabId, { text, title, color }) {
+  const calls = [chrome.action.setBadgeText({ text: text ?? "", tabId })];
+  if (title) calls.push(chrome.action.setTitle({ title, tabId }));
+  if (color) calls.push(chrome.action.setBadgeBackgroundColor({ color, tabId }));
+  await Promise.all(calls.map((call) => call.catch(() => {})));
+}
+
+async function clearCaptureBadge(tabId) {
+  await Promise.all([
+    chrome.action.setBadgeText({ text: "", tabId }).catch(() => {}),
+    chrome.action.setTitle({ title: "Capture full page screenshot", tabId }).catch(() => {}),
+    chrome.action.setBadgeBackgroundColor({ color: "#3f6fd8", tabId }).catch(() => {}),
+  ]);
+}
+
 async function updateCaptureProgress(tabId, progress) {
   try {
     await exec(tabId, renderCaptureProgress, [progress]);
@@ -313,9 +324,12 @@ async function updateCaptureProgress(tabId, progress) {
 
 async function cleanupCaptureTab(tabId) {
   await updateCaptureProgress(tabId, { remove: true });
-  await restorePageAfterCapture(tabId);
+  await callPage(tabId, "restore", {}).catch(() => {});
 }
 
+// The panel is built once and then only its text and bar width are written.
+// Rebuilding innerHTML on every update replaced the bar with a fresh node, so
+// its width transition never had a previous value to animate from.
 function renderCaptureProgress(progress) {
   const id = "__fps_progress_overlay";
   const existing = document.getElementById(id);
@@ -325,961 +339,452 @@ function renderCaptureProgress(progress) {
     return;
   }
 
+  // Fade out rather than snap: the panel stays in the DOM (fixed, no pointer
+  // events, no layout impact) so the next show does not rebuild it.
   if (progress.hidden) {
-    if (existing) existing.hidden = true;
+    if (existing) existing.style.opacity = "0";
     return;
   }
 
   const overlay = existing || document.createElement("div");
-  overlay.id = id;
-  overlay.dataset.fpsUi = "1";
-  overlay.hidden = false;
-  overlay.style.cssText = [
-    "position:fixed",
-    "right:18px",
-    "bottom:18px",
-    "z-index:2147483647",
-    "width:260px",
-    "padding:14px",
-    "border:1px solid rgba(255,255,255,0.12)",
-    "border-radius:10px",
-    "background:rgba(24,27,34,0.94)",
-    "box-shadow:0 18px 50px rgba(0,0,0,0.35)",
-    "color:#fff",
-    "font:13px system-ui,sans-serif",
-    "pointer-events:none",
-  ].join(";");
+  if (!existing) {
+    overlay.id = id;
+    overlay.dataset.fpsUi = "1";
+    overlay.style.cssText = [
+      "position:fixed",
+      "right:18px",
+      "bottom:18px",
+      "z-index:2147483647",
+      "width:260px",
+      "padding:14px",
+      "border:1px solid rgba(255,255,255,0.12)",
+      "border-radius:10px",
+      "background:rgba(24,27,34,0.94)",
+      "box-shadow:0 18px 50px rgba(0,0,0,0.35)",
+      "color:#fff",
+      "font:13px system-ui,sans-serif",
+      "pointer-events:none",
+      "opacity:0",
+      "transition:opacity 120ms ease",
+    ].join(";");
+    overlay.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:9px;">
+        <strong data-fps-part="label" style="font-size:13px;font-weight:700;"></strong>
+        <span data-fps-part="count" style="color:#b9c2d0;font-size:12px;"></span>
+      </div>
+      <div data-fps-part="detail" style="margin:-4px 0 10px;color:#b9c2d0;font-size:12px;line-height:1.35;"></div>
+      <div style="height:7px;overflow:hidden;border-radius:999px;background:#343946;">
+        <div data-fps-part="bar" style="height:100%;width:0%;border-radius:999px;background:#78a0ff;transition:width 160ms ease;"></div>
+      </div>
+    `;
+    document.documentElement.appendChild(overlay);
+    // Let the initial opacity:0 render before the fade-in is requested.
+    requestAnimationFrame(() => {
+      overlay.style.opacity = "1";
+    });
+  } else {
+    overlay.style.opacity = "1";
+  }
 
   const total = Math.max(1, progress.total || 1);
   const current = Math.min(total, Math.max(0, progress.current || 0));
-  const percent = Math.round((current / total) * 100);
-  overlay.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:9px;">
-      <strong style="font-size:13px;font-weight:700;">${progress.label || "Capturing screenshot"}</strong>
-      <span style="color:#b9c2d0;font-size:12px;">${current}/${total}</span>
-    </div>
-    <div style="margin:-4px 0 10px;color:#b9c2d0;font-size:12px;line-height:1.35;">${progress.detail || "Please keep this tab active."}</div>
-    <div style="height:7px;overflow:hidden;border-radius:999px;background:#343946;">
-      <div style="height:100%;width:${percent}%;border-radius:999px;background:#78a0ff;transition:width 160ms ease;"></div>
-    </div>
-  `;
-
-  if (!existing) document.documentElement.appendChild(overlay);
+  const part = (name) => overlay.querySelector(`[data-fps-part="${name}"]`);
+  part("label").textContent = progress.label || "Capturing screenshot";
+  part("count").textContent = `${current}/${total}`;
+  part("detail").textContent = progress.detail || "Please keep this tab active.";
+  part("bar").style.width = `${Math.round((current / total) * 100)}%`;
 }
 
-async function restorePageAfterCapture(tabId, scroll = {}) {
+/* ------------------------------------------------------------------ *
+ * Generic full-page capture engine
+ *
+ * One scroll-and-stitch loop drives every site. It works against a
+ * "scroll target" that is either the document or a scrollable element,
+ * and records explicit geometry for every frame so the viewer can
+ * stitch without guessing.
+ * ------------------------------------------------------------------ */
+
+// Chrome rate-limits captureVisibleTab to about two calls per second.
+const MIN_CAPTURE_INTERVAL_MS = 550;
+// How long the on-page panel stays up before the frame loop starts, and how
+// long its fade needs to finish so it cannot be caught in the first frame.
+const PANEL_READ_MS = 900;
+const PANEL_FADE_MS = 160;
+// Budgets that stop growing/infinite pages instead of running forever.
+const BUDGET = {
+  maxFrames: 80,
+  maxDurationMs: 180000,
+  maxContentHeight: 80000,
+};
+
+let lastCaptureAt = 0;
+const activeSessions = new Map();
+
+async function captureVisibleTabRateLimited(windowId) {
+  const wait = lastCaptureAt + MIN_CAPTURE_INTERVAL_MS - Date.now();
+  if (wait > 0) await sleep(wait);
+  const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: "png" });
+  lastCaptureAt = Date.now();
+  return dataUrl;
+}
+
+class CaptureCanceled extends Error {
+  constructor(reason) {
+    super(reason);
+    this.name = "CaptureCanceled";
+    this.canceled = true;
+  }
+}
+
+function beginSession(tab) {
+  if (activeSessions.has(tab.id)) return null;
+  const session = {
+    tabId: tab.id,
+    windowId: tab.windowId,
+    startedAt: Date.now(),
+    canceledReason: "",
+  };
+  activeSessions.set(tab.id, session);
+  return session;
+}
+
+function endSession(tabId) {
+  activeSessions.delete(tabId);
+}
+
+function cancelSession(tabId, reason) {
+  const session = activeSessions.get(tabId);
+  if (session && !session.canceledReason) session.canceledReason = reason;
+}
+
+// captureVisibleTab always grabs the window's active tab, so anything that
+// moves the page or the focus out from under us has to stop the run.
+chrome.tabs.onRemoved.addListener((tabId) => cancelSession(tabId, "The tab was closed."));
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url || changeInfo.status === "loading") {
+    cancelSession(tabId, "The page navigated during capture.");
+  }
+});
+chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
+  for (const session of activeSessions.values()) {
+    if (session.windowId === windowId && session.tabId !== tabId) {
+      cancelSession(session.tabId, "Another tab became active during capture.");
+    }
+  }
+});
+
+function checkCanceled(session) {
+  if (session.canceledReason) throw new CaptureCanceled(session.canceledReason);
+}
+
+async function injectPageEngine(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["capture-page.js"],
+  });
+}
+
+// Call one of the page-side helpers published by capture-page.js.
+async function callPage(tabId, method, payload = null) {
+  return exec(
+    tabId,
+    (name, arg) => {
+      const api = globalThis.__fpsPage;
+      return api && api[name] ? api[name](arg) : null;
+    },
+    [method, payload]
+  );
+}
+
+/* --------------------------- the capture loop --------------------------- */
+
+async function captureFullPage(tab, options = {}) {
+  const tabId = tab.id;
+  const session = beginSession(tab);
+  if (!session) {
+    const busy = new Error("A capture is already running in this tab.");
+    busy.concurrent = true; // the other run owns the page; don't touch it
+    throw busy;
+  }
+
+  let restoreState = {};
   try {
-    await exec(
-      tabId,
-      ({ left, top, elementScrollTop }) => {
-        for (const el of document.querySelectorAll("[data-fps-hidden]")) {
-          el.style.removeProperty("visibility");
-          delete el.dataset.fpsHidden;
-        }
+    await injectPageEngine(tabId);
 
-        if (["chatgpt.com", "chat.openai.com"].includes(location.hostname)) {
-          const scrollTarget = document.querySelector('[data-fps-scroll-target="chatgpt"]');
-          if (scrollTarget) {
-            if (Number.isFinite(elementScrollTop)) {
-              scrollTarget.scrollTo({
-                top: elementScrollTop,
-                left: scrollTarget.scrollLeft,
-                behavior: "instant",
-              });
-            }
-            delete scrollTarget.dataset.fpsScrollTarget;
-          }
+    if (options.pickTarget) {
+      const picked = await callPage(tabId, "pickScrollTarget");
+      if (!picked?.picked && picked?.reason === "canceled") {
+        await exec(tabId, showSelectionFeedback, ["Capture canceled"]);
+        return;
+      }
+    }
 
-          const captureRoot = document.getElementById("__fps_chatgpt_capture_root");
-          if (captureRoot) captureRoot.remove();
-          const captureStyle = document.getElementById("__fps_chatgpt_capture_style");
-          if (captureStyle) captureStyle.remove();
+    let target = await callPage(tabId, "prepareTarget", {});
+    if (!target) throw new Error("Could not inspect this page for a scrollable area.");
+    if (target.reason === "no-scrollable-area") {
+      // Nothing scrolls: a single viewport is the whole page.
+      await captureVisibleArea(tab);
+      return;
+    }
 
-          for (const el of document.querySelectorAll("[data-fps-chatgpt-had-style]")) {
-            if (!el.hasAttribute("data-fps-chatgpt-had-style")) continue;
+    if (target.ambiguous && !options.pickTarget) {
+      const picked = await callPage(tabId, "pickScrollTarget");
+      if (picked?.picked) {
+        target = (await callPage(tabId, "prepareTarget", {})) || target;
+      } else if (picked?.reason === "canceled") {
+        await exec(tabId, showSelectionFeedback, ["Capture canceled"]);
+        return;
+      }
+    }
 
-            const hadStyle = el.getAttribute("data-fps-chatgpt-had-style") === "1";
-            const originalStyle = el.getAttribute("data-fps-chatgpt-original-style") || "";
-            if (hadStyle) {
-              el.setAttribute("style", originalStyle);
-            } else {
-              el.removeAttribute("style");
-            }
-            el.removeAttribute("data-fps-chatgpt-had-style");
-            el.removeAttribute("data-fps-chatgpt-original-style");
-          }
-        }
+    restoreState = {
+      left: target.originalScrollX,
+      top: target.originalScrollY,
+      elementScrollTop: target.originalElementScrollTop,
+      elementScrollLeft: target.originalElementScrollLeft,
+    };
 
-        const hasLeft = Number.isFinite(left);
-        const hasTop = Number.isFinite(top);
-        if (hasLeft || hasTop) {
-          window.scrollTo({
-            left: hasLeft ? left : window.scrollX,
-            top: hasTop ? top : window.scrollY,
-            behavior: "instant",
-          });
-        }
+    // Element targets capture only that pane, so make the scope visible first.
+    if (target.kind === "element") await callPage(tabId, "flashTarget", {});
+
+    // Threads that page in older content have to finish doing that before the
+    // first frame, or everything captured afterwards is offset.
+    await updateCaptureProgress(tabId, {
+      current: 0,
+      total: 1,
+      label: "Preparing full page",
+      detail: "Loading content above the starting point",
+    });
+    const settled = await callPage(tabId, "settleTop", {});
+    if (settled?.contentHeight > target.contentHeight) {
+      target = { ...target, contentHeight: settled.contentHeight };
+    }
+
+    // Last word before the panel goes away: the frame loop cannot show
+    // anything on the page, because every frame is photographed.
+    const sections = Math.max(
+      1,
+      Math.ceil(target.contentHeight / Math.max(1, target.viewportHeight))
+    );
+    await updateCaptureProgress(tabId, {
+      current: 0,
+      total: sections,
+      label: "Capturing full page",
+      detail: `About ${sections} section${sections === 1 ? "" : "s"}, roughly ${Math.max(
+        1,
+        Math.round((sections * MIN_CAPTURE_INTERVAL_MS) / 1000)
+      )}s. Progress shows on the toolbar icon - keep this tab active.`,
+    });
+    await sleep(PANEL_READ_MS);
+
+    // Hidden for the whole loop, and shown again only once it is over.
+    await updateCaptureProgress(tabId, { hidden: true });
+    await sleep(PANEL_FADE_MS);
+
+    const result = await runCaptureLoop(tab, session, target);
+    if (!result.frames.length) {
+      throw new Error(result.truncated?.message || "No frames were captured.");
+    }
+
+    await updateCaptureProgress(tabId, {
+      current: result.frames.length,
+      total: result.frames.length,
+      label: "Preparing editor",
+      detail: "Stitching captured sections",
+    });
+
+    await saveCapture(tab, {
+      frames: result.frames,
+      metrics: {
+        // Kept for the viewer's older stitching path and for file naming.
+        pageHeight: result.contentHeight,
+        viewportWidth: target.viewportWidth,
+        viewportHeight: target.viewportHeight,
+        dpr: target.dpr,
+        originalScrollX: target.originalScrollX,
+        originalScrollY: target.originalScrollY,
       },
-      [
+      layout: {
+        version: 2,
+        targetKind: target.kind,
+        contentHeight: result.contentHeight,
+        capturedHeight: result.covered,
+        viewportWidth: target.viewportWidth,
+      },
+      truncated: result.truncated,
+      diagnostics: result.diagnostics || undefined,
+      mode: "fullPage",
+    });
+  } finally {
+    await callPage(tabId, "restore", restoreState).catch((err) =>
+      console.warn("Unable to restore page after capture:", err)
+    );
+    await updateCaptureProgress(tabId, { remove: true });
+    await clearCaptureBadge(tabId);
+    endSession(tabId);
+  }
+}
+
+async function runCaptureLoop(tab, session, target) {
+  const tabId = tab.id;
+  const frames = [];
+  const scales = [];
+  // Opt-in, local only: geometry and timing, never page text or image data.
+  const { captureDiagnostics } = await chrome.storage.local.get("captureDiagnostics");
+  const diagnostics = captureDiagnostics
+    ? [
         {
-          left: scroll.originalScrollX,
-          top: scroll.originalScrollY,
-          elementScrollTop: scroll.originalElementScrollTop,
+          event: "target",
+          kind: target.kind,
+          contentHeight: target.contentHeight,
+          scrollRange: target.scrollRange,
+          rect: target.rect,
+          viewportWidth: target.viewportWidth,
+          viewportHeight: target.viewportHeight,
+          dpr: target.dpr,
+          ambiguous: !!target.ambiguous,
         },
       ]
-    );
-  } catch (err) {
-    console.warn("Unable to restore page after capture:", err);
-  }
-}
+    : null;
 
-function isChatGptUrl(url) {
-  try {
-    return CHATGPT_SCROLL_HOSTS.has(new URL(url).hostname);
-  } catch (_err) {
-    return false;
-  }
-}
+  let contentHeight = target.contentHeight;
+  let scrollRange = target.scrollRange;
+  let truncated = null;
+  let previousScrollTop = -1;
 
-function setupChatGptDocumentCapture() {
-  if (!["chatgpt.com", "chat.openai.com"].includes(location.hostname)) return null;
-
-  function findTarget() {
-    const candidates = [...document.querySelectorAll("section, div, main, [role='region']")]
-      .map((el) => {
-        const rect = el.getBoundingClientRect();
-        const style = getComputedStyle(el);
-        const className = typeof el.className === "string" ? el.className : "";
-        const scrollable = el.scrollHeight > el.clientHeight + 100;
-        const visible = rect.width >= 320 && rect.height >= 240 && style.display !== "none";
-        const overflowAllowed = style.overflowY !== "hidden" && style.visibility !== "hidden";
-        if (!scrollable || !visible || !overflowAllowed) return null;
-
-        let score = el.scrollHeight - el.clientHeight;
-        if (className.includes("threadViewport")) score += 20000;
-        if (className.includes("detailBody")) score += 12000;
-        if (className.includes("conversation")) score += 8000;
-        if (el.getAttribute("role") === "region") score += 6000;
-        score += Math.min(3000, rect.height + rect.width / 4);
-
-        return { el, score };
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.score - a.score);
-
-    return candidates[0]?.el || null;
-  }
-
-  const target = findTarget();
-  if (!target) return null;
-  target.dataset.fpsScrollTarget = "chatgpt";
-
-  const previousRoot = document.getElementById("__fps_chatgpt_capture_root");
-  if (previousRoot) previousRoot.remove();
-  const previousStyle = document.getElementById("__fps_chatgpt_capture_style");
-  if (previousStyle) previousStyle.remove();
-
-  const rect = target.getBoundingClientRect();
-  const root = document.createElement("div");
-  const style = document.createElement("style");
-  const clone = target.cloneNode(true);
-
-  root.id = "__fps_chatgpt_capture_root";
-  root.dataset.fpsUi = "1";
-  root.style.cssText = [
-    "position:absolute",
-    "z-index:2147483646",
-    "top:0",
-    "left:0",
-    "width:100vw",
-    "min-height:100vh",
-    "background:#fff",
-    "color:#111",
-    "overflow:visible",
-  ].join(";");
-
-  style.id = "__fps_chatgpt_capture_style";
-  style.textContent = `
-    #__fps_chatgpt_capture_root,
-    #__fps_chatgpt_capture_root * {
-      animation: none !important;
-      transition: none !important;
-      max-height: none !important;
-      scroll-behavior: auto !important;
-    }
-    #__fps_chatgpt_capture_root [class*="threadViewport"],
-    #__fps_chatgpt_capture_root [class*="detailBody"],
-    #__fps_chatgpt_capture_root [class*="conversation"],
-    #__fps_chatgpt_capture_root [class*="thread"] {
-      contain: none !important;
-      height: auto !important;
-      max-height: none !important;
-      min-height: 0 !important;
-      overflow: visible !important;
-      position: static !important;
-      transform: none !important;
-    }
-    #__fps_chatgpt_capture_root form,
-    #__fps_chatgpt_capture_root textarea,
-    #__fps_chatgpt_capture_root [contenteditable="true"],
-    #__fps_chatgpt_capture_root button,
-    #__fps_chatgpt_capture_root [role="button"],
-    #__fps_chatgpt_capture_root [aria-label*="Scroll"],
-    #__fps_chatgpt_capture_root [aria-label*="scroll"] {
-      display: none !important;
-    }
-  `;
-
-  clone.removeAttribute("id");
-  clone.removeAttribute("data-fps-scroll-target");
-  clone.style.cssText = [
-    "box-sizing:border-box",
-    `width:${Math.max(320, rect.width)}px`,
-    "height:auto",
-    "max-height:none",
-    "min-height:0",
-    "overflow:visible",
-    "position:static",
-    "transform:none",
-    "contain:none",
-    "margin:0 auto",
-    "background:#fff",
-  ].join(";");
-
-  root.appendChild(clone);
-
-  for (const el of [document.documentElement, document.body].filter(Boolean)) {
-    if (!el.hasAttribute("data-fps-chatgpt-had-style")) {
-      el.setAttribute("data-fps-chatgpt-had-style", el.hasAttribute("style") ? "1" : "0");
-      el.setAttribute("data-fps-chatgpt-original-style", el.getAttribute("style") || "");
-    }
-  }
-
-  document.documentElement.style.setProperty("overflow", "auto", "important");
-  document.documentElement.style.setProperty("height", "auto", "important");
-  document.body.style.setProperty("overflow", "auto", "important");
-  document.body.style.setProperty("height", "auto", "important");
-  document.body.style.setProperty("min-height", `${Math.max(target.scrollHeight, window.innerHeight)}px`, "important");
-
-  document.documentElement.appendChild(style);
-  document.body.appendChild(root);
-
-  const pageHeight = Math.max(root.scrollHeight, clone.scrollHeight, target.scrollHeight, window.innerHeight);
-  root.style.minHeight = `${pageHeight}px`;
-  document.body.style.setProperty("min-height", `${pageHeight}px`, "important");
-
-  window.scrollTo({ top: 0, left: 0, behavior: "instant" });
-
-  return {
-    pageHeight,
-    viewportWidth: window.innerWidth,
-    viewportHeight: window.innerHeight,
-    dpr: window.devicePixelRatio,
-    originalScrollX: window.scrollX,
-    originalScrollY: window.scrollY,
-    originalElementScrollTop: target.scrollTop,
-    stagedChatGptCapture: true,
-  };
-}
-
-function setupChatGptExpandedCapture() {
-  if (!["chatgpt.com", "chat.openai.com"].includes(location.hostname)) return null;
-
-  function findTarget() {
-    const candidates = [...document.querySelectorAll("section, div, main, [role='region']")]
-      .map((el) => {
-        const rect = el.getBoundingClientRect();
-        const style = getComputedStyle(el);
-        const className = typeof el.className === "string" ? el.className : "";
-        const scrollable = el.scrollHeight > el.clientHeight + 100;
-        const visible = rect.width >= 320 && rect.height >= 240 && style.display !== "none";
-        const overflowAllowed = style.overflowY !== "hidden" && style.visibility !== "hidden";
-        if (!scrollable || !visible || !overflowAllowed) return null;
-
-        let score = el.scrollHeight - el.clientHeight;
-        if (className.includes("threadViewport")) score += 20000;
-        if (className.includes("detailBody")) score += 12000;
-        if (className.includes("conversation")) score += 8000;
-        if (el.getAttribute("role") === "region") score += 6000;
-        score += Math.min(3000, rect.height + rect.width / 4);
-
-        return { el, score };
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.score - a.score);
-
-    return candidates[0]?.el || null;
-  }
-
-  function rememberStyle(el) {
-    if (!el || el.hasAttribute("data-fps-chatgpt-had-style")) return;
-    el.setAttribute("data-fps-chatgpt-had-style", el.hasAttribute("style") ? "1" : "0");
-    el.setAttribute("data-fps-chatgpt-original-style", el.getAttribute("style") || "");
-  }
-
-  function hide(el) {
-    if (!el || el.closest("[data-fps-ui]")) return;
-    el.dataset.fpsHidden = "1";
-    el.style.setProperty("visibility", "hidden", "important");
-  }
-
-  const target = findTarget();
-  if (!target) return null;
-
-  const originalScrollX = window.scrollX;
-  const originalScrollY = window.scrollY;
-  const originalElementScrollTop = target.scrollTop;
-  const pageHeight = Math.max(target.scrollHeight, window.innerHeight);
-  target.dataset.fpsScrollTarget = "chatgpt";
-  target.scrollTo({ top: 0, left: target.scrollLeft, behavior: "instant" });
-
-  const path = [];
-  for (let el = target; el && el !== document.documentElement; el = el.parentElement) {
-    path.push(el);
-  }
-  path.push(document.documentElement);
-
-  for (const el of path) {
-    rememberStyle(el);
-    el.style.setProperty("overflow", "visible", "important");
-    el.style.setProperty("max-height", "none", "important");
-    el.style.setProperty("contain", "none", "important");
-    el.style.setProperty("transform", "none", "important");
-    el.style.setProperty("position", "static", "important");
-    if (el === target) {
-      el.style.setProperty("height", `${pageHeight}px`, "important");
-      el.style.setProperty("min-height", `${pageHeight}px`, "important");
-    } else {
-      el.style.setProperty("height", "auto", "important");
-      el.style.setProperty("min-height", "0", "important");
-    }
-  }
-
-  rememberStyle(document.body);
-  document.body.style.setProperty("overflow", "visible", "important");
-  document.body.style.setProperty("height", "auto", "important");
-  document.body.style.setProperty("min-height", `${pageHeight}px`, "important");
-
-  for (const el of target.querySelectorAll("*")) {
-    const className = typeof el.className === "string" ? el.className : "";
-    if (
-      el.scrollHeight > el.clientHeight + 100 ||
-      className.includes("threadViewport") ||
-      className.includes("detailBody") ||
-      className.includes("conversation") ||
-      className.includes("thread")
-    ) {
-      rememberStyle(el);
-      el.style.setProperty("overflow", "visible", "important");
-      el.style.setProperty("height", "auto", "important");
-      el.style.setProperty("max-height", "none", "important");
-      el.style.setProperty("contain", "none", "important");
-      el.style.setProperty("transform", "none", "important");
-    }
-  }
-
-  for (const el of document.querySelectorAll("form, textarea, [contenteditable='true']")) {
-    const rect = el.getBoundingClientRect();
-    if (rect.width >= 260 && rect.top > window.innerHeight * 0.25) hide(el.closest("form") || el);
-  }
-
-  for (const el of document.querySelectorAll("button, a, [role='button'], [tabindex]")) {
-    const text = (el.textContent || "").trim().toLowerCase();
-    const label = (el.getAttribute("aria-label") || "").toLowerCase();
-    const rect = el.getBoundingClientRect();
-    const isAuthControl = text === "log in" || text === "sign up for free";
-    const isScrollControl =
-      label.includes("scroll") || (rect.width <= 96 && rect.height <= 96 && rect.top > window.innerHeight * 0.25);
-    const isTopChatGptControl = text === "chatgpt" && rect.top < 80 && rect.left < 180;
-    if (isAuthControl || isScrollControl || isTopChatGptControl) hide(el);
-  }
-
-  for (const el of document.querySelectorAll("*")) {
-    if (el.closest("[data-fps-ui]") || el === target || el.contains(target) || target.contains(el)) continue;
-    const pos = getComputedStyle(el).position;
-    if (pos === "fixed" || pos === "sticky") hide(el);
-  }
-
-  window.scrollTo({ top: 0, left: 0, behavior: "instant" });
-
-  const expandedHeight = Math.max(
-    document.documentElement.scrollHeight,
-    document.body ? document.body.scrollHeight : 0,
-    pageHeight
+  const overlap = Math.round(
+    FpsGeometry.clamp(Math.round(target.viewportHeight * 0.05), 16, 96)
   );
+  const walk = new FpsGeometry.CaptureWalk({ overlap });
+  let estimatedTotal = FpsGeometry.planScrollPositions({
+    scrollRange,
+    band: Math.max(1, target.viewportHeight),
+    overlap,
+  }).length;
 
-  return {
-    pageHeight: expandedHeight,
-    viewportWidth: window.innerWidth,
-    viewportHeight: window.innerHeight,
-    dpr: window.devicePixelRatio,
-    originalScrollX,
-    originalScrollY,
-    originalElementScrollTop,
-    stagedChatGptCapture: true,
-  };
-}
+  for (let index = 0; ; index++) {
+    checkCanceled(session);
 
-function chatGptScrollMetrics() {
-  if (!["chatgpt.com", "chat.openai.com"].includes(location.hostname)) return null;
-
-  function findTarget() {
-    const existing = document.querySelector('[data-fps-scroll-target="chatgpt"]');
-    if (existing && existing.scrollHeight > existing.clientHeight + 100) {
-      return existing;
+    if (index >= BUDGET.maxFrames) {
+      truncated = { reason: "frames", message: `Stopped after ${BUDGET.maxFrames} sections.` };
+      break;
+    }
+    if (Date.now() - session.startedAt > BUDGET.maxDurationMs) {
+      truncated = { reason: "time", message: "Stopped after the capture time limit." };
+      break;
+    }
+    if (contentHeight > BUDGET.maxContentHeight) {
+      truncated = {
+        reason: "height",
+        message: `The page is taller than the ${BUDGET.maxContentHeight}px capture limit.`,
+      };
+      break;
     }
 
-    const candidates = [...document.querySelectorAll("section, div, main, [role='region']")]
-      .map((el) => {
-        const rect = el.getBoundingClientRect();
-        const style = getComputedStyle(el);
-        const className = typeof el.className === "string" ? el.className : "";
-        const scrollable = el.scrollHeight > el.clientHeight + 100;
-        const visible = rect.width >= 320 && rect.height >= 240 && style.display !== "none";
-        const overflowAllowed = style.overflowY !== "hidden" && style.visibility !== "hidden";
-        if (!scrollable || !visible || !overflowAllowed) return null;
-
-        let score = el.scrollHeight - el.clientHeight;
-        if (className.includes("threadViewport")) score += 20000;
-        if (className.includes("detailBody")) score += 12000;
-        if (className.includes("conversation")) score += 8000;
-        if (el.getAttribute("role") === "region") score += 6000;
-        score += Math.min(3000, rect.height + rect.width / 4);
-
-        return { el, score };
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.score - a.score);
-
-    const candidate = candidates[0]?.el || null;
-    if (candidate) candidate.dataset.fpsScrollTarget = "chatgpt";
-    return candidate;
-  }
-
-  const target = findTarget();
-  if (!target) return null;
-
-  function bottomObscurerTop(rect) {
-    let top = rect.bottom;
-
-    for (const el of document.querySelectorAll("form, textarea, [contenteditable='true']")) {
-      if (el.closest("[data-fps-ui]")) continue;
-
-      const elRect = el.getBoundingClientRect();
-      const overlapsTarget =
-        elRect.bottom > rect.top &&
-        elRect.top < rect.bottom &&
-        elRect.right > rect.left &&
-        elRect.left < rect.right;
-      const looksLikeComposer =
-        elRect.width >= 260 &&
-        elRect.height >= 24 &&
-        elRect.top > window.innerHeight * 0.35;
-
-      if (overlapsTarget && looksLikeComposer) top = Math.min(top, elRect.top);
-    }
-
-    for (const el of document.querySelectorAll("button, [role='button'], [tabindex], svg")) {
-      if (el.closest("[data-fps-ui]")) continue;
-
-      const elRect = el.getBoundingClientRect();
-      const centerX = elRect.left + elRect.width / 2;
-      const targetCenterX = rect.left + rect.width / 2;
-      const overlapsTarget =
-        elRect.bottom > rect.top &&
-        elRect.top < rect.bottom &&
-        elRect.right > rect.left &&
-        elRect.left < rect.right;
-      const looksLikeFloatingControl =
-        elRect.width >= 16 &&
-        elRect.width <= 96 &&
-        elRect.height >= 16 &&
-        elRect.height <= 96 &&
-        Math.abs(centerX - targetCenterX) < 120 &&
-        elRect.top > window.innerHeight * 0.25;
-
-      if (overlapsTarget && looksLikeFloatingControl) top = Math.min(top, elRect.top);
-    }
-
-    return top;
-  }
-
-  const rect = target.getBoundingClientRect();
-  const left = Math.max(0, rect.left);
-  const top = Math.max(0, rect.top);
-  const right = Math.min(window.innerWidth, rect.right);
-  const safeHeight = Math.max(220, Math.min(320, Math.floor(target.clientHeight * 0.32)));
-  const bottom = Math.min(window.innerHeight, rect.bottom, top + safeHeight);
-  const captureHeight = Math.max(0, bottom - top);
-
-  return {
-    pageHeight: target.scrollHeight,
-    viewportWidth: window.innerWidth,
-    viewportHeight: captureHeight || target.clientHeight,
-    scrollStep: Math.max(120, captureHeight),
-    dpr: window.devicePixelRatio,
-    originalScrollX: window.scrollX,
-    originalScrollY: window.scrollY,
-    originalElementScrollTop: target.scrollTop,
-    scrollRect: {
-      left,
-      top,
-      width: Math.max(0, right - left),
-      height: captureHeight,
-    },
-    scrollTarget: "chatgpt",
-  };
-}
-
-function scrollChatGptTarget(top) {
-  function findTarget() {
-    const existing = document.querySelector('[data-fps-scroll-target="chatgpt"]');
-    if (existing && existing.scrollHeight > existing.clientHeight + 100) {
-      return existing;
-    }
-
-    const candidates = [...document.querySelectorAll("section, div, main, [role='region']")]
-      .map((el) => {
-        const rect = el.getBoundingClientRect();
-        const style = getComputedStyle(el);
-        const className = typeof el.className === "string" ? el.className : "";
-        const scrollable = el.scrollHeight > el.clientHeight + 100;
-        const visible = rect.width >= 320 && rect.height >= 240 && style.display !== "none";
-        const overflowAllowed = style.overflowY !== "hidden" && style.visibility !== "hidden";
-        if (!scrollable || !visible || !overflowAllowed) return null;
-
-        let score = el.scrollHeight - el.clientHeight;
-        if (className.includes("threadViewport")) score += 20000;
-        if (className.includes("detailBody")) score += 12000;
-        if (className.includes("conversation")) score += 8000;
-        if (el.getAttribute("role") === "region") score += 6000;
-        score += Math.min(3000, rect.height + rect.width / 4);
-
-        return { el, score };
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.score - a.score);
-
-    const candidate = candidates[0]?.el || null;
-    if (candidate) candidate.dataset.fpsScrollTarget = "chatgpt";
-    return candidate;
-  }
-
-  const target = findTarget();
-  if (!target) return null;
-
-  target.scrollTo({
-    top,
-    left: target.scrollLeft,
-    behavior: "instant",
-  });
-  return target.scrollTop;
-}
-
-function hideChatGptCaptureChrome() {
-  const target = document.querySelector('[data-fps-scroll-target="chatgpt"]');
-  if (!target) return;
-
-  function hide(el) {
-    if (!el || el.closest("[data-fps-ui]") || el === target || el.contains(target)) return;
-    el.dataset.fpsHidden = "1";
-    el.style.setProperty("visibility", "hidden", "important");
-  }
-
-  function hideCompactAncestor(el) {
-    let current = el;
-    let best = el;
-
-    while (current && current !== document.body && current !== target) {
-      const rect = current.getBoundingClientRect();
-      if (rect.width >= 260 && rect.height > 24 && rect.height <= 220) best = current;
-      if (rect.width > window.innerWidth * 0.92 || rect.height > window.innerHeight * 0.45) break;
-      current = current.parentElement;
-    }
-
-    hide(best);
-  }
-
-  for (const el of document.querySelectorAll("*")) {
-    const rect = el.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const targetRect = target.getBoundingClientRect();
-    const targetCenterX = targetRect.left + targetRect.width / 2;
-    const style = getComputedStyle(el);
-    const compact = rect.width >= 24 && rect.width <= 96 && rect.height >= 24 && rect.height <= 96;
-    const centered = Math.abs(centerX - targetCenterX) < 96;
-    const lowerHalf = rect.top > window.innerHeight * 0.25;
-    const chromeLike =
-      style.borderRadius !== "0px" ||
-      style.boxShadow !== "none" ||
-      el.querySelector("svg") ||
-      el.tagName === "SVG";
-
-    if (compact && centered && lowerHalf && chromeLike) hideCompactAncestor(el);
-  }
-
-  for (const el of document.querySelectorAll("button, a, [role='button'], [tabindex]")) {
-    const text = (el.textContent || "").trim().toLowerCase();
-    const label = (el.getAttribute("aria-label") || "").toLowerCase();
-    const rect = el.getBoundingClientRect();
-    const isAuthControl = text === "log in" || text === "sign up for free";
-    const isScrollControl =
-      label.includes("scroll") || (rect.width <= 64 && rect.height <= 64 && rect.top > window.innerHeight * 0.45);
-    const isTopChatGptControl = text === "chatgpt" && rect.top < 80 && rect.left < 160;
-
-    if (isAuthControl || isScrollControl || isTopChatGptControl) hideCompactAncestor(el);
-  }
-
-  for (const el of document.querySelectorAll("*")) {
-    if (el.closest("[data-fps-ui]")) continue;
-    if (el === target || el.contains(target)) continue;
-
-    const pos = getComputedStyle(el).position;
-    if (pos === "fixed" || pos === "sticky") {
-      el.dataset.fpsHidden = "1";
-      el.style.setProperty("visibility", "hidden", "important");
-    }
-  }
-}
-
-async function captureStandardFullPage(tab, metrics) {
-  const tabId = tab.id;
-
-  // One capture per viewport, with the final one clamped to the page bottom.
-  const positions = [];
-  const maxY = Math.max(0, metrics.pageHeight - metrics.viewportHeight);
-  for (let y = 0; y < maxY; y += metrics.viewportHeight) positions.push(y);
-  positions.push(maxY);
-
-  await updateCaptureProgress(tabId, {
-    current: 0,
-    total: positions.length,
-    label: "Preparing full page",
-    detail: `${positions.length} section${positions.length === 1 ? "" : "s"} to capture`,
-  });
-
-  const frames = [];
-  for (let i = 0; i < positions.length; i++) {
-    await chrome.action.setBadgeText({
-      text: `${i + 1}/${positions.length}`,
-      tabId,
+    const total = Math.max(estimatedTotal, index + 1);
+    await updateCaptureBadge(tabId, {
+      text: `${index + 1}/${total}`,
+      title: `Capturing section ${index + 1} of ${total} - keep this tab active`,
     });
 
-    await exec(
-      tabId,
-      (top) => window.scrollTo({ top, left: 0, behavior: "instant" }),
-      [positions[i]]
+    const requestedTop = walk.nextTop(scrollRange);
+    await callPage(tabId, "scrollAndSettle", { top: requestedTop, timeoutMs: 1500 });
+    let measured = await callPage(tabId, "measureFrame", { isFirst: index === 0 });
+
+    // If a pinned element grew and opened a gap, drop back by the shortfall
+    // once rather than losing rows.
+    const shortfall = walk.repairShortfall(measured);
+    if (shortfall) {
+      await callPage(tabId, "scrollAndSettle", {
+        top: Math.max(0, measured.scrollTop - shortfall),
+        timeoutMs: 900,
+      });
+      measured = await callPage(tabId, "measureFrame", { isFirst: false });
+    }
+
+    contentHeight = Math.max(contentHeight, measured.contentHeight);
+    scrollRange = measured.scrollRange;
+
+    if (measured.source.height <= 0 || measured.source.width <= 0) {
+      truncated = {
+        reason: "occluded",
+        message: "The scrollable area was fully covered by pinned page elements.",
+      };
+      break;
+    }
+
+    checkCanceled(session);
+    const dataUrl = await captureVisibleTabRateLimited(tab.windowId);
+
+    frames.push({
+      dataUrl,
+      scrollTop: measured.scrollTop,
+      source: measured.source,
+      dest: measured.dest,
+      viewportWidth: measured.viewportWidth,
+      dpr: measured.dpr,
+    });
+    scales.push(measured.dpr);
+    const covered = walk.accept(measured);
+
+    diagnostics?.push({
+      event: "frame",
+      index,
+      requestedTop,
+      scrollTop: measured.scrollTop,
+      repaired: shortfall,
+      source: measured.source,
+      destTop: measured.dest.top,
+      trimTop: measured.trimTop,
+      trimBottom: measured.trimBottom,
+      blockedMiddle: measured.blockedMiddle,
+      contentHeight: measured.contentHeight,
+      covered,
+      elapsedMs: Date.now() - session.startedAt,
+    });
+
+    const step = Math.max(1, measured.source.height - overlap);
+    estimatedTotal = Math.max(
+      index + 1,
+      index + 1 + Math.ceil(Math.max(0, scrollRange - measured.scrollTop) / step)
     );
 
-    // From the second frame on, hide fixed/sticky elements so headers and
-    // cookie bars don't repeat in every slice.
-    if (i === 1) {
-      await exec(tabId, () => {
-        for (const el of document.querySelectorAll("*")) {
-          if (el.closest("[data-fps-ui]")) continue;
-          const pos = getComputedStyle(el).position;
-          if (pos === "fixed" || pos === "sticky") {
-            el.dataset.fpsHidden = "1";
-            el.style.setProperty("visibility", "hidden", "important");
-          }
-        }
-      });
+    await updateCaptureBadge(tabId, {
+      text: `${index + 1}/${Math.max(estimatedTotal, index + 1)}`,
+      title: `Captured ${Math.round(
+        Math.min(100, (covered / Math.max(1, contentHeight)) * 100)
+      )}% of the page - keep this tab active`,
+    });
+
+    const atBottom = measured.scrollTop >= scrollRange - 1;
+    if (walk.isComplete(measured, contentHeight)) break;
+    if (atBottom && measured.scrollTop === previousScrollTop) {
+      // The target refuses to scroll further but content is still missing.
+      truncated = {
+        reason: "stuck",
+        message: "The page stopped scrolling before the end of its content.",
+      };
+      break;
     }
-
-    await updateCaptureProgress(tabId, {
-      current: i,
-      total: positions.length,
-      label: `Positioning section ${i + 1}`,
-      detail: "Scrolling and waiting for content to settle",
-    });
-    await sleep(CAPTURE_DELAY_MS);
-    await updateCaptureProgress(tabId, {
-      current: i,
-      total: positions.length,
-      label: `Capturing section ${i + 1}`,
-      detail: "Hiding capture overlay",
-    });
-    await updateCaptureProgress(tabId, { hidden: true });
-    await sleep(80);
-
-    // The browser may clamp the scroll; record where the page actually is.
-    const actualY = await exec(tabId, () => window.scrollY);
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-      format: "png",
-    });
-    frames.push({ y: actualY, dataUrl });
-    await updateCaptureProgress(tabId, {
-      current: i + 1,
-      total: positions.length,
-      label: `Captured section ${i + 1}`,
-      detail: `${positions.length - i - 1} section${positions.length - i - 1 === 1 ? "" : "s"} remaining`,
-    });
+    previousScrollTop = measured.scrollTop;
   }
 
-  await updateCaptureProgress(tabId, {
-    current: positions.length,
-    total: positions.length,
-    label: "Restoring page",
-    detail: "Putting scroll position and sticky elements back",
-  });
-
-  // Restore the page: unhide fixed elements, scroll back to where the user was.
-  await exec(
-    tabId,
-    ({ left, top }) => {
-      for (const el of document.querySelectorAll("[data-fps-hidden]")) {
-        el.style.removeProperty("visibility");
-        delete el.dataset.fpsHidden;
-      }
-      window.scrollTo({
-        left: Number.isFinite(left) ? left : 0,
-        top: Number.isFinite(top) ? top : 0,
-        behavior: "instant",
-      });
-    },
-    [{ left: metrics.originalScrollX, top: metrics.originalScrollY }]
-  );
-  await updateCaptureProgress(tabId, {
-    current: positions.length,
-    total: positions.length,
-    label: "Preparing editor",
-    detail: "Stitching captured sections",
-  });
-  await updateCaptureProgress(tabId, { remove: true });
-  await chrome.action.setBadgeText({ text: "", tabId });
-
-  await saveCapture(tab, {
-    frames,
-    metrics,
-    mode: "fullPage",
-  });
-}
-
-async function captureFullPage(tab) {
-  const tabId = tab.id;
-
-  let metrics = await exec(tabId, () => ({
-    pageHeight: Math.max(
-      document.documentElement.scrollHeight,
-      document.body ? document.body.scrollHeight : 0
-    ),
-    viewportWidth: window.innerWidth,
-    viewportHeight: window.innerHeight,
-    dpr: window.devicePixelRatio,
-    originalScrollX: window.scrollX,
-    originalScrollY: window.scrollY,
-  }));
-
-  const shouldUseChatGptPath =
-    isChatGptUrl(tab.url) && metrics.pageHeight <= metrics.viewportHeight + 1;
-  if (!shouldUseChatGptPath) {
-    await captureStandardFullPage(tab, metrics);
-    return;
+  const widths = frames.map((frame) => frame.viewportWidth);
+  const consistency = FpsGeometry.checkScaleConsistency(scales);
+  const sameWidth = widths.every((width) => width === widths[0]);
+  if ((!consistency.ok || !sameWidth) && !truncated) {
+    truncated = {
+      reason: "scale",
+      message: "The page zoom or window size changed during capture; sections may not line up.",
+    };
   }
 
-  const expandedChatGptMetrics =
-    await exec(tabId, setupChatGptExpandedCapture);
-  if (expandedChatGptMetrics?.pageHeight > expandedChatGptMetrics.viewportHeight) {
-    metrics = expandedChatGptMetrics;
+  if (diagnostics) {
+    diagnostics.push({ event: "end", frames: frames.length, truncated, covered: walk.covered });
+    console.info("[full-page-screenshot] capture diagnostics", diagnostics);
   }
 
-  const chatGptMetrics =
-    !metrics.stagedChatGptCapture && isChatGptUrl(tab.url) && metrics.pageHeight <= metrics.viewportHeight + 1
-      ? await exec(tabId, chatGptScrollMetrics)
-      : null;
-
-  if (
-    chatGptMetrics?.scrollRect?.width > 0 &&
-    chatGptMetrics.scrollRect.height > 0 &&
-    chatGptMetrics.pageHeight > chatGptMetrics.viewportHeight
-  ) {
-    await captureScrollableElementPage(tab, chatGptMetrics);
-    return;
-  }
-
-  // One capture per viewport, with the final one clamped to the page bottom.
-  const positions = [];
-  const maxY = Math.max(0, metrics.pageHeight - metrics.viewportHeight);
-  for (let y = 0; y < maxY; y += metrics.viewportHeight) positions.push(y);
-  positions.push(maxY);
-
-  await updateCaptureProgress(tabId, {
-    current: 0,
-    total: positions.length,
-    label: "Preparing full page",
-    detail: `${positions.length} section${positions.length === 1 ? "" : "s"} to capture`,
-  });
-
-  const frames = [];
-  try {
-    for (let i = 0; i < positions.length; i++) {
-      await chrome.action.setBadgeText({
-        text: `${i + 1}/${positions.length}`,
-        tabId,
-      });
-
-      await exec(
-        tabId,
-        (top) => window.scrollTo({ top, left: 0, behavior: "instant" }),
-        [positions[i]]
-      );
-
-      // From the second frame on, hide fixed/sticky elements so headers and
-      // cookie bars don't repeat in every slice.
-      if (i === 1 && !metrics.stagedChatGptCapture) {
-        await exec(tabId, () => {
-          for (const el of document.querySelectorAll("*")) {
-            if (el.closest("[data-fps-ui]")) continue;
-            const pos = getComputedStyle(el).position;
-            if (pos === "fixed" || pos === "sticky") {
-              el.dataset.fpsHidden = "1";
-              el.style.setProperty("visibility", "hidden", "important");
-            }
-          }
-        });
-      }
-
-      await updateCaptureProgress(tabId, {
-        current: i,
-        total: positions.length,
-        label: `Positioning section ${i + 1}`,
-        detail: "Scrolling and waiting for content to settle",
-      });
-      await sleep(CAPTURE_DELAY_MS);
-      await updateCaptureProgress(tabId, {
-        current: i,
-        total: positions.length,
-        label: `Capturing section ${i + 1}`,
-        detail: "Hiding capture overlay",
-      });
-      await updateCaptureProgress(tabId, { hidden: true });
-      await sleep(80);
-
-      // The browser may clamp the scroll; record where the page actually is.
-      const actualY = await exec(tabId, () => window.scrollY);
-      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-        format: "png",
-      });
-      frames.push({ y: actualY, dataUrl });
-      await updateCaptureProgress(tabId, {
-        current: i + 1,
-        total: positions.length,
-        label: `Captured section ${i + 1}`,
-        detail: `${positions.length - i - 1} section${positions.length - i - 1 === 1 ? "" : "s"} remaining`,
-      });
-    }
-  } catch (err) {
-    await restorePageAfterCapture(tabId, metrics);
-    throw err;
-  }
-
-  await updateCaptureProgress(tabId, {
-    current: positions.length,
-    total: positions.length,
-    label: "Restoring page",
-    detail: "Putting scroll position and sticky elements back",
-  });
-
-  await restorePageAfterCapture(tabId, metrics);
-  await updateCaptureProgress(tabId, {
-    current: positions.length,
-    total: positions.length,
-    label: "Preparing editor",
-    detail: "Stitching captured sections",
-  });
-  await updateCaptureProgress(tabId, { remove: true });
-  await chrome.action.setBadgeText({ text: "", tabId });
-
-  await saveCapture(tab, {
-    frames,
-    metrics,
-    mode: "fullPage",
-  });
-}
-
-async function captureScrollableElementPage(tab, metrics) {
-  const tabId = tab.id;
-
-  const positions = [];
-  const scrollStep = Math.max(120, metrics.scrollStep || metrics.viewportHeight);
-  const maxY = Math.max(0, metrics.pageHeight - metrics.viewportHeight);
-  for (let y = 0; y < maxY; y += scrollStep) positions.push(y);
-  positions.push(maxY);
-
-  await updateCaptureProgress(tabId, {
-    current: 0,
-    total: positions.length,
-    label: "Preparing full page",
-    detail: `${positions.length} section${positions.length === 1 ? "" : "s"} to capture`,
-  });
-
-  const frames = [];
-  try {
-    await exec(tabId, hideChatGptCaptureChrome);
-
-    for (let i = 0; i < positions.length; i++) {
-      await chrome.action.setBadgeText({
-        text: `${i + 1}/${positions.length}`,
-        tabId,
-      });
-
-      const actualY = await exec(tabId, scrollChatGptTarget, [positions[i]]);
-
-      await updateCaptureProgress(tabId, {
-        current: i,
-        total: positions.length,
-        label: `Positioning section ${i + 1}`,
-        detail: "Scrolling and waiting for content to settle",
-      });
-      await sleep(CAPTURE_DELAY_MS);
-      await exec(tabId, hideChatGptCaptureChrome);
-      await updateCaptureProgress(tabId, {
-        current: i,
-        total: positions.length,
-        label: `Capturing section ${i + 1}`,
-        detail: "Hiding capture overlay",
-      });
-      await updateCaptureProgress(tabId, { hidden: true });
-      await sleep(80);
-
-      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-        format: "png",
-      });
-      frames.push({ y: Number.isFinite(actualY) ? actualY : positions[i], dataUrl });
-      await updateCaptureProgress(tabId, {
-        current: i + 1,
-        total: positions.length,
-        label: `Captured section ${i + 1}`,
-        detail: `${positions.length - i - 1} section${positions.length - i - 1 === 1 ? "" : "s"} remaining`,
-      });
-    }
-  } catch (err) {
-    await restorePageAfterCapture(tabId, metrics);
-    throw err;
-  }
-
-  await updateCaptureProgress(tabId, {
-    current: positions.length,
-    total: positions.length,
-    label: "Restoring page",
-    detail: "Putting scroll position and sticky elements back",
-  });
-
-  await restorePageAfterCapture(tabId, metrics);
-  await updateCaptureProgress(tabId, {
-    current: positions.length,
-    total: positions.length,
-    label: "Preparing editor",
-    detail: "Stitching captured sections",
-  });
-  await updateCaptureProgress(tabId, { remove: true });
-  await chrome.action.setBadgeText({ text: "", tabId });
-
-  await saveCapture(tab, {
-    frames,
-    metrics,
-    mode: "fullPage",
-  });
+  return { frames, covered: walk.covered, contentHeight, truncated, diagnostics };
 }
 
 async function saveCapture(tab, capture) {

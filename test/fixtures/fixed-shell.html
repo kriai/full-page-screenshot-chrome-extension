@@ -1,0 +1,19 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture: fixed app shell with an inner scroller</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  html, body { height: 100%; overflow: hidden; }
+  .shell { display: flex; flex-direction: column; height: 100vh; }
+  .sidebar { position: fixed; left: 0; top: 44px; bottom: 0; width: 220px; background: #eef2f8; border-right: 1px solid #cbd5e1; padding: 16px; }
+  .main { flex: 1; margin-left: 220px; margin-top: 44px; overflow-y: auto; }
+  .composer { position: fixed; left: 220px; right: 0; bottom: 0; height: 96px; background: #fff; border-top: 1px solid #cbd5e1; padding: 16px; }
+</style>
+<div class="shell">
+  <div class="fixed-top">Fixture: fixed app shell - the document does not scroll</div>
+  <div class="sidebar">Sidebar (fixed)</div>
+  <div class="main" id="host"></div>
+  <div class="composer">Composer pinned over the bottom of the scroller</div>
+</div>
+<script src="rows.js"></script>
+<script>buildRows(document.getElementById("host"), 140);</script>

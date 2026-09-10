@@ -1,13 +1,15 @@
 const status = document.getElementById("status");
 const buttons = Array.from(document.querySelectorAll("button[data-mode]"));
 
-async function startCapture(mode) {
+async function startCapture(mode, options = {}) {
   const labels = {
     fullPage: "Starting full-page capture",
     visible: "Starting visible-area capture",
     selection: "Open page and drag an area",
   };
-  status.textContent = labels[mode] || "Starting capture";
+  status.textContent = options.pickTarget
+    ? "Click the area to capture"
+    : labels[mode] || "Starting capture";
   status.classList.add("loading");
   buttons.forEach((button) => {
     button.disabled = true;
@@ -18,6 +20,7 @@ async function startCapture(mode) {
     response = await chrome.runtime.sendMessage({
       type: "startCapture",
       mode,
+      options,
     });
   } catch (err) {
     response = { ok: false, error: err.message };
@@ -36,7 +39,13 @@ async function startCapture(mode) {
 }
 
 buttons.forEach((button) => {
-  button.addEventListener("click", () => startCapture(button.dataset.mode));
+  button.addEventListener("click", (event) => {
+    // Alt/Shift-click forces the scroll-area picker when the automatic choice
+    // is wrong (pages with several independently scrolling panes).
+    const pickTarget =
+      button.dataset.mode === "fullPage" && (event.altKey || event.shiftKey);
+    startCapture(button.dataset.mode, { pickTarget });
+  });
 });
 
 document.getElementById("history").addEventListener("click", async () => {

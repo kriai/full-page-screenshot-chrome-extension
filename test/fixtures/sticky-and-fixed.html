@@ -1,0 +1,19 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture: sticky header, fixed bar, cookie banner</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .cookie { position: fixed; right: 20px; bottom: 20px; width: 280px; padding: 16px; border-radius: 10px; background: #111827; color: #fff; z-index: 20; }
+  .section { border-top: 3px solid #94a3b8; }
+</style>
+<div class="fixed-top">Fixed top bar - should appear once, at the top</div>
+<div style="height:52px"></div>
+<div class="section"><div class="sticky">Sticky section header A</div><div id="a"></div></div>
+<div class="section"><div class="sticky">Sticky section header B</div><div id="b"></div></div>
+<div class="fixed-bottom">Fixed bottom bar - should not repeat down the image</div>
+<div class="cookie">Cookie banner - should not repeat down the image</div>
+<script src="rows.js"></script>
+<script>
+  buildRows(document.getElementById("a"), 60, { label: "A" });
+  buildRows(document.getElementById("b"), 60, { label: "B" });
+</script>

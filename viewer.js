@@ -206,7 +206,7 @@ function makePdfBlob(jpegBytes, imageWidth, imageHeight) {
   return new Blob([concatBytes(chunks)], { type: "application/pdf" });
 }
 
-function drawCapture(capture, images) {
+function drawCapture(capture, images, report = {}) {
   const { frames, metrics, mode, cropRect } = capture;
   const scale = images[0].width / metrics.viewportWidth;
   const canvas = document.createElement("canvas");
@@ -227,6 +227,42 @@ function drawCapture(capture, images) {
     canvas.width = images[0].width;
     canvas.height = images[0].height;
     ctx.drawImage(images[0], 0, 0);
+    return canvas;
+  }
+
+  // Captures from the shared engine carry explicit per-frame geometry: a
+  // source rectangle in viewport pixels and the content offset it belongs at.
+  if (capture.layout?.version === 2 && frames[0]?.source) {
+    const scales = frames.map((frame, i) => images[i].width / frame.viewportWidth);
+    const consistency = FpsGeometry.checkScaleConsistency(scales);
+    if (!consistency.ok) {
+      report.scaleWarning =
+        "The page zoom or window size changed while capturing, so sections may not line up.";
+    }
+
+    const layout = FpsGeometry.resolveFrameLayout(frames, { scale: consistency.scale });
+    const budget = FpsGeometry.checkOutputBudget(layout.width, layout.height);
+    if (!budget.ok) throw new Error(budget.message);
+
+    canvas.width = layout.width;
+    canvas.height = layout.height;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    for (const draw of layout.draws) {
+      ctx.drawImage(
+        images[draw.index],
+        draw.sx,
+        draw.sy,
+        draw.sw,
+        draw.sh,
+        draw.dx,
+        draw.dy,
+        draw.sw,
+        draw.sh
+      );
+    }
+    report.gaps = layout.gaps;
+    report.capturedHeight = layout.contentHeight;
     return canvas;
   }
 
@@ -251,6 +287,12 @@ function drawCapture(capture, images) {
 
     return canvas;
   }
+
+  const legacyBudget = FpsGeometry.checkOutputBudget(
+    images[0].width,
+    Math.round(metrics.pageHeight * scale)
+  );
+  if (!legacyBudget.ok) throw new Error(legacyBudget.message);
 
   canvas.width = images[0].width;
   canvas.height = Math.round(metrics.pageHeight * scale);
@@ -2391,6 +2433,22 @@ async function saveUploadToHistory(url) {
   await chrome.storage.local.set({ history });
 }
 
+// A capture can succeed only partially: budgets stop very long pages, pinned
+// elements can hide rows, and a mid-capture zoom breaks alignment. Say so
+// rather than handing back a silently incomplete image.
+function captureNotice(capture, report) {
+  const parts = [];
+  if (capture.truncated?.message) {
+    parts.push(`Partial capture: ${capture.truncated.message}`);
+  }
+  if (report.scaleWarning) parts.push(report.scaleWarning);
+  if (report.gaps?.length) {
+    const missing = report.gaps.reduce((sum, gap) => sum + (gap.to - gap.from), 0);
+    parts.push(`${Math.round(missing)}px of the page could not be captured.`);
+  }
+  return parts.join(" ");
+}
+
 async function main() {
   const status = document.getElementById("status");
   const { capture } = await chrome.storage.local.get("capture");
@@ -2408,7 +2466,8 @@ async function main() {
   status.textContent = "Loading captured frames";
   const images = await Promise.all(frames.map((f) => loadImage(f.dataUrl)));
   status.textContent = "Stitching screenshot";
-  editor.baseCanvas = drawCapture(capture, images);
+  const stitchReport = {};
+  editor.baseCanvas = drawCapture(capture, images, stitchReport);
   editor.projectBaseDataUrl = capture.project?.baseDataUrl || "";
   editor.baseDisplayCanvas = document.getElementById("baseDisplayCanvas");
   editor.baseDisplayCtx = editor.baseDisplayCanvas.getContext("2d");
@@ -2445,7 +2504,14 @@ async function main() {
   document.getElementById("actions").hidden = false;
   setupZoomControls();
   status.classList.remove("loading");
-  status.hidden = true;
+
+  const notice = captureNotice(capture, stitchReport);
+  if (notice) {
+    status.textContent = notice;
+    status.hidden = false;
+  } else {
+    status.hidden = true;
+  }
 
   // The frames are large; drop them now that the image is rendered.
   await chrome.storage.local.remove("capture");

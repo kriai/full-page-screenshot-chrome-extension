@@ -1,0 +1,10 @@
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.4 system-ui, sans-serif; color: #14161c; }
+.row { display: flex; align-items: center; gap: 14px; padding: 0 18px; border-bottom: 1px solid #e2e6ef; }
+.num { font-variant-numeric: tabular-nums; font-weight: 700; color: #4a556b; }
+.bar { width: 120px; height: 12px; border-radius: 6px; }
+.banner { padding: 12px 18px; background: #101828; color: #fff; font-weight: 600; }
+.sticky { position: sticky; top: 0; z-index: 5; background: #1d4ed8; color: #fff; padding: 12px 18px; font-weight: 700; }
+.fixed-top { position: fixed; top: 0; left: 0; right: 0; z-index: 9; background: #0f172a; color: #fff; padding: 12px 18px; font-weight: 700; }
+.fixed-bottom { position: fixed; bottom: 0; left: 0; right: 0; z-index: 9; background: #7c2d12; color: #fff; padding: 14px 18px; font-weight: 700; }
+.pane { overflow-y: auto; border: 1px solid #cbd5e1; }

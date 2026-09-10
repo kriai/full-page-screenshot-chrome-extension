@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture: nested scrollers</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  html, body { height: 100%; overflow: hidden; }
+  .outer { height: 100vh; overflow-y: auto; }
+  .inner { height: 320px; overflow-y: auto; margin: 20px; }
+</style>
+<div class="outer" id="outer">
+  <div class="banner">Fixture: a dominant outer scroller with a small inner one</div>
+  <div id="top"></div>
+  <div class="pane inner" id="inner"></div>
+  <div id="bottom"></div>
+</div>
+<script src="rows.js"></script>
+<script>
+  buildRows(document.getElementById("top"), 40, { label: "outer" });
+  buildRows(document.getElementById("inner"), 60, { label: "inner" });
+  buildRows(document.getElementById("bottom"), 40, { label: "outer" });
+</script>

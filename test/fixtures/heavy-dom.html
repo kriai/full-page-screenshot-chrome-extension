@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture: heavy DOM</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .cell { display: inline-block; width: 40px; height: 14px; margin: 1px; background: #dbe3f0; }
+  .float { position: fixed; z-index: 9; padding: 8px 12px; border-radius: 8px; background: #111827; color: #fff; }
+</style>
+<div class="fixed-top">Heavy DOM: ~20k elements, several pinned widgets</div>
+<div style="height:52px"></div>
+<div class="sticky">Sticky section header</div>
+<div id="host"></div>
+<div class="fixed-bottom">Fixed bottom bar</div>
+<div class="float" style="right:20px;bottom:80px">Chat widget</div>
+<div class="float" style="left:20px;bottom:80px">Consent</div>
+<script src="rows.js"></script>
+<script>
+  const host = document.getElementById("host");
+  for (let i = 0; i < 200; i++) {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.height = "60px";
+    row.innerHTML = `<span class="num">${String(i + 1).padStart(4, "0")}</span>`;
+    for (let c = 0; c < 100; c++) {
+      const cell = document.createElement("span");
+      cell.className = "cell";
+      row.appendChild(cell);
+    }
+    host.appendChild(row);
+  }
+</script>

@@ -1,0 +1,18 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture: two competing panes</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  html, body { height: 100%; overflow: hidden; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; height: 100vh; }
+  .split > div { overflow-y: auto; }
+</style>
+<div class="split">
+  <div class="pane" id="left"></div>
+  <div class="pane" id="right"></div>
+</div>
+<script src="rows.js"></script>
+<script>
+  buildRows(document.getElementById("left"), 90, { label: "left" });
+  buildRows(document.getElementById("right"), 90, { label: "right" });
+</script>

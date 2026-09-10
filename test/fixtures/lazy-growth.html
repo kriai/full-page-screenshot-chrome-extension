@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture: lazy images and a growing page</title>
+<link rel="stylesheet" href="base.css">
+<div class="banner">Fixture: images decode late and the page grows twice while scrolling</div>
+<div id="host"></div>
+<script src="rows.js"></script>
+<script>
+  const host = document.getElementById("host");
+  const svg = (i) =>
+    "data:image/svg+xml;utf8," +
+    encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="48"><rect width="200" height="48" fill="hsl(${(i * 23) % 360} 70% 60%)"/><text x="8" y="30" font-size="20" fill="#fff">img ${i}</text></svg>`
+    );
+
+  function addBatch(start, count) {
+    for (let i = start; i < start + count; i++) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.style.height = "60px";
+      row.innerHTML = `<span class="num">${String(i + 1).padStart(4, "0")}</span>`;
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.width = 200;
+      img.height = 48;
+      img.src = svg(i);
+      row.appendChild(img);
+      host.appendChild(row);
+    }
+  }
+
+  addBatch(0, 60);
+  let grown = 0;
+  addEventListener("scroll", () => {
+    const nearBottom = innerHeight + scrollY > document.body.scrollHeight - 400;
+    if (nearBottom && grown < 2) {
+      grown++;
+      addBatch(60 * grown, 60);
+    }
+  });
+</script>

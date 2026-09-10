@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture: virtualized list</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  html, body { height: 100%; overflow: hidden; }
+  .viewport { height: 100vh; overflow-y: auto; }
+  .spacer { position: relative; }
+  .vrow { position: absolute; left: 0; right: 0; display: flex; align-items: center; gap: 14px; padding: 0 18px; height: 60px; border-bottom: 1px solid #e2e6ef; }
+</style>
+<div class="viewport" id="viewport">
+  <div class="spacer" id="spacer"></div>
+</div>
+<script>
+  // Only the rows near the viewport exist in the DOM; the rest are recycled.
+  const TOTAL = 400;
+  const ROW = 60;
+  const viewport = document.getElementById("viewport");
+  const spacer = document.getElementById("spacer");
+  spacer.style.height = `${TOTAL * ROW}px`;
+
+  function render() {
+    const first = Math.max(0, Math.floor(viewport.scrollTop / ROW) - 5);
+    const last = Math.min(TOTAL, first + Math.ceil(viewport.clientHeight / ROW) + 10);
+    spacer.textContent = "";
+    for (let i = first; i < last; i++) {
+      const row = document.createElement("div");
+      row.className = "vrow";
+      row.style.top = `${i * ROW}px`;
+      row.style.background = i % 2 ? "#f4f6fb" : "#ffffff";
+      row.innerHTML = `<span class="num">${String(i + 1).padStart(4, "0")}</span>
+        <span class="bar" style="background:hsl(${(i * 7) % 360} 80% 55%)"></span>
+        <span class="label">virtual row ${i + 1}</span>`;
+      spacer.appendChild(row);
+    }
+  }
+
+  viewport.addEventListener("scroll", render);
+  render();
+</script>
