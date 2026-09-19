@@ -20,6 +20,183 @@
     return Math.min(max, Math.max(min, value));
   }
 
+  /* --------------------------- seam alignment ---------------------------- *
+   * The scroll loop assumes the page moved by exactly the amount we asked
+   * for, and derives every frame's content offset from scrollTop. Sub-pixel
+   * rounding, scroll anchoring and content that reflows mid-capture all break
+   * that assumption, and the result is a visible tear where two frames meet.
+   *
+   * These helpers work on two overlapping bands - the bottom of the frame we
+   * already have, and the region of the new frame that should hold the same
+   * rows - and answer "how far off is it?". Deciding the shift is worth
+   * believing is part of the job: a page whose overlap genuinely differs (an
+   * animation, a carousel) must not be dragged out of alignment by a match
+   * that is merely the least bad.
+   * ---------------------------------------------------------------------- */
+
+  const SEAM = {
+    // Bands are squashed to this width before comparing. Seams are horizontal,
+    // so horizontal detail is noise; 96 columns is enough to tell rows apart
+    // and keeps each probe well under a millisecond.
+    sampleWidth: 96,
+    // Device px of overlap actually compared, and how far either side of the
+    // nominal position we look for a better match. The range only has to cover
+    // rounding and a late-settling row or two - anything larger is a reflow,
+    // which the page-side anchor reports directly.
+    maxBand: 48,
+    maxSearch: 48,
+    // The thresholds below are a mean absolute channel difference, 0-255.
+    // They are measured rather than chosen, because the numbers depend
+    // enormously on what is on the page. Two reference bands - a paragraph of
+    // 16px prose, and a photo-like run of gradients and blobs:
+    //
+    //                         prose   photo
+    //   perfectly aligned       0.0     0.0
+    //   aligned, sub-pixel      0.0     1.5
+    //   out by 1px              6.2     3.7
+    //   out by 2px             12.3     7.3
+    //   out by 3px             16.9    10.8
+    //   out by 12px            30.0    39.9
+    //   unrelated content       6.3    90.3
+    //
+    // Two things in that table drive everything below. Chrome snaps glyph
+    // rasterisation to whole device pixels, so text has no sub-pixel noise
+    // floor at all: a prose band either matches exactly or is out by a whole
+    // pixel. And prose is sparse dark-on-white, so two unrelated paragraphs
+    // sit on top of each other in mostly-white pixels and differ *less* than
+    // the same paragraph shifted two - which is why the absolute thresholds
+    // here are small, and why one of them cannot do its whole job.
+
+    // Below this the bands already agree and searching would only chase
+    // rasterisation noise. Held under the photo column's 1px case so that even
+    // a small slip on dense content is still reachable.
+    skipDiff: 3,
+    // A shift has to at least halve the difference and land genuinely low
+    // before a frame is moved on its evidence. The absolute gate does most of
+    // the work: a correct match lands on the "aligned" row - 0 for prose, 1.5
+    // for a photo - so 10 clears every real correction with room to spare
+    // while still rejecting a search that merely found the least bad offset.
+    acceptRatio: 0.5,
+    acceptDiff: 10,
+    // Past this, a seam the search could not fix is treated as a bad frame
+    // rather than a misplaced one, and the frame is re-taken.
+    //
+    // The threshold tracks how visible an error is rather than how many
+    // pixels it is, which is the useful behaviour: 2px crosses it in prose,
+    // where a jogged line of text is obvious, but not in a smooth gradient,
+    // where the same 2px cannot be seen.
+    //
+    // On dense content it also catches a frame caught mid-paint, which scores
+    // 90.3. On prose it cannot: unrelated text scores 6.3, about what a
+    // one-pixel slip scores, so no threshold separates them without firing on
+    // every frame. What it does catch on prose is a visible slip the search
+    // could not explain, which is the more common failure anyway.
+    retryDiff: 12,
+  };
+
+  // Mean absolute RGB difference between `rows` scanlines of two RGBA buffers,
+  // starting at scanline `rowA` / `rowB`. Alpha is ignored: screenshots are
+  // opaque, so it carries no signal.
+  function meanChannelDiff(a, b, rowA, rowB, width, rows) {
+    const stride = width * 4;
+    let total = 0;
+    for (let y = 0; y < rows; y++) {
+      let ia = (rowA + y) * stride;
+      let ib = (rowB + y) * stride;
+      for (let x = 0; x < width; x++, ia += 4, ib += 4) {
+        total +=
+          Math.abs(a[ia] - b[ib]) +
+          Math.abs(a[ia + 1] - b[ib + 1]) +
+          Math.abs(a[ia + 2] - b[ib + 2]);
+      }
+    }
+    return total / (width * rows * 3);
+  }
+
+  // Search for the vertical offset that best lines the two bands up. `score`
+  // takes a candidate shift in device px and returns its difference.
+  //
+  // Every offset in range is tried. A coarse sweep refined around its winner
+  // would be cheaper, but it only lands on the right answer when the
+  // difference curve slopes towards it - and that assumes content with
+  // vertical extent. Dense small text, hairline rules and tight table borders
+  // all produce a curve that is flat everywhere except at the true offset,
+  // where a coarse sweep steps straight over it. At this range an exhaustive
+  // sweep is a few hundred thousand byte comparisons per seam, which is
+  // nothing beside the screenshot that produced the band.
+  //
+  // Returns the nominal difference as `base` either way, so a caller can tell
+  // "already aligned" (low base) from "no shift was believable" (high base).
+  function findSeamShift(score, search, options = {}) {
+    const skipDiff = options.skipDiff ?? SEAM.skipDiff;
+    const acceptRatio = options.acceptRatio ?? SEAM.acceptRatio;
+    const acceptDiff = options.acceptDiff ?? SEAM.acceptDiff;
+
+    const base = score(0);
+    const reach = Math.floor(Math.max(0, search));
+    if (reach < 1 || base <= skipDiff) return { shift: 0, diff: base, base };
+
+    let bestShift = 0;
+    let bestDiff = base;
+    for (let s = -reach; s <= reach; s++) {
+      if (s === 0) continue;
+      const diff = score(s);
+      // Ties go to the smaller move: if two offsets fit equally well the page
+      // most likely did not travel as far as the larger one claims.
+      if (diff < bestDiff || (diff === bestDiff && Math.abs(s) < Math.abs(bestShift))) {
+        bestDiff = diff;
+        bestShift = s;
+      }
+    }
+
+    const believable =
+      bestShift !== 0 && bestDiff <= base * acceptRatio && bestDiff <= acceptDiff;
+    return believable
+      ? { shift: bestShift, diff: bestDiff, base }
+      : { shift: 0, diff: base, base };
+  }
+
+  // Where to read the two bands from, given the geometry of the frame we have
+  // and the frame we just took. All inputs and outputs are device pixels in
+  // their own frame's screenshot. Returns null when the frames do not overlap
+  // enough for a comparison to mean anything.
+  //
+  // `prevRow` / `nextRow` are the top scanline of the band in each frame; a
+  // candidate shift moves `nextRow` only.
+  function planSeamProbe(prev, next, options = {}) {
+    const maxBand = options.maxBand ?? SEAM.maxBand;
+    const maxSearch = options.maxSearch ?? SEAM.maxSearch;
+
+    // Content rows the two frames have in common, in the coordinate space the
+    // page reported. The band is taken from the bottom of that run: it is the
+    // part closest to the seam, and the part most likely to still be on screen
+    // in the new frame.
+    const prevEnd = prev.destTop + prev.height;
+    const overlap = Math.floor(Math.min(prevEnd - next.destTop, prev.height, next.height));
+    if (overlap < 8) return null;
+
+    // The overlap has to pay for two things: rows to compare, and room to
+    // slide them past each other. Spending all of it on the band would leave a
+    // probe that can only ever confirm the offset it was handed, so cap the
+    // band at half and let the search have the rest.
+    const band = Math.min(maxBand, Math.floor(overlap / 2));
+    if (band < 4) return null;
+
+    const prevRow = prev.top + prev.height - band;
+    const nextRow = next.top + (prevEnd - band - next.destTop);
+    if (prevRow < prev.top || nextRow < next.top) return null;
+
+    // Never let the probe wander outside the readable band of either frame:
+    // beyond it lies a hidden overlay's leftovers, or nothing at all. Below
+    // the band the new frame usually has a whole viewport to spare; above it,
+    // only what the overlap did not spend.
+    const up = nextRow - next.top;
+    const down = next.top + next.height - (nextRow + band);
+    const search = Math.floor(clamp(Math.min(maxSearch, up, down), 0, maxSearch));
+
+    return { band, prevRow, nextRow, search };
+  }
+
   // Scroll offsets for one pass over `scrollRange`, advancing by the usable
   // band height minus `overlap`. The final position is always the very bottom
   // so a short last frame still reaches the end of the content.
@@ -36,8 +213,14 @@
   // content offset it starts at (`dest.top`) and the viewport rectangle that
   // was actually readable (`source`). Overlap is trimmed off the *later* frame
   // so every content row is painted exactly once, in capture order.
+  // `outputScale` shrinks the stitched image without changing where the pixels
+  // are read from. Source rectangles have to stay at the screenshots' own
+  // scale - they index into the PNGs - so only the destination moves. This is
+  // what lets a page taller than a canvas be delivered whole and slightly
+  // reduced, rather than sharp and cut off.
   function resolveFrameLayout(frames, options = {}) {
     const scale = options.scale || 1;
+    const outputScale = options.outputScale || 1;
     const ordered = frames
       .map((frame, index) => ({ frame, index }))
       .filter(({ frame }) => frame && frame.source && frame.source.height > 0)
@@ -64,6 +247,7 @@
         gaps.push({ from: covered, to: top });
       }
 
+      const out = scale * outputScale;
       draws.push({
         index,
         sx: Math.round(source.left * scale),
@@ -71,22 +255,28 @@
         sw: Math.round(source.width * scale),
         sh: Math.round(height * scale),
         dx: 0,
-        dy: Math.round((top - ordered[0].frame.dest.top) * scale),
+        dy: Math.round((top - ordered[0].frame.dest.top) * out),
+        dw: Math.round(source.width * out),
+        // Round the bottom edge rather than the height, so consecutive draws
+        // share an edge exactly. Rounding each height independently leaves a
+        // hairline of background between frames at fractional output scales.
+        dh:
+          Math.round((top + height - ordered[0].frame.dest.top) * out) -
+          Math.round((top - ordered[0].frame.dest.top) * out),
       });
-      width = Math.max(width, Math.round(source.width * scale));
+      width = Math.max(width, Math.round(source.width * out));
       covered = top + height;
     }
 
     const first = ordered.length ? ordered[0].frame.dest.top : 0;
-    const height = draws.length
-      ? Math.max(...draws.map((d) => d.dy + d.sh))
-      : 0;
+    const height = draws.length ? Math.max(...draws.map((d) => d.dy + d.dh)) : 0;
 
     return {
       draws,
       gaps,
       width,
       height,
+      outputScale,
       contentTop: first,
       contentHeight: covered - first,
     };
@@ -162,6 +352,50 @@
     return { ok: true };
   }
 
+  // Where the scrolling pane sits inside the finished image, for an app shell.
+  //
+  // The pane's own stitch is `layout`; everything around it - a sidebar, a
+  // header, a composer - is static, so it is painted once instead of repeated
+  // down every frame. The pane keeps its place in the window, the furniture
+  // above it keeps its height, and whatever sits below the pane is pushed to
+  // the foot of the finished image.
+  function shellComposite(shell, layout, scale = 1) {
+    const out = (layout.outputScale || 1) * scale;
+    const px = (v) => Math.round(v * out);
+    const paneX = px(shell.pane.left);
+    const paneY = px(shell.pane.top);
+    const footerHeight = Math.max(
+      0,
+      px(shell.viewport.height) - px(shell.pane.top + shell.pane.height)
+    );
+    return {
+      paneX,
+      paneY,
+      footerHeight,
+      width: Math.max(px(shell.viewport.width), paneX + layout.width),
+      height: paneY + layout.height + footerHeight,
+      viewportWidth: px(shell.viewport.width),
+      viewportHeight: px(shell.viewport.height),
+      // Below this the furniture is no longer on screen in any frame, so the
+      // side columns simply stop. Reported so a caller can fill the rest
+      // rather than leaving a hard edge.
+      furnitureBottom: Math.min(px(shell.viewport.height), paneY + layout.height),
+    };
+  }
+
+  // The largest factor a stitch of this size can keep and still be allocated.
+  // 1 when it already fits. Returns 0 when even a heavy reduction cannot save
+  // it, which means the capture is genuinely too big to deliver as one image.
+  function fitOutputScale(width, height) {
+    if (!(width > 0) || !(height > 0)) return 0;
+    const bySide = Math.min(MAX_CANVAS_SIDE / width, MAX_CANVAS_SIDE / height);
+    const byPixels = Math.sqrt(MAX_CANVAS_PIXELS / (width * height));
+    const fit = Math.min(1, bySide, byPixels);
+    // Below this the result is too soft to be worth handing over as if it were
+    // a screenshot of the page.
+    return fit < 0.2 ? 0 : fit;
+  }
+
   // Frames are only stitchable together when they share a pixel scale; a zoom
   // change or a window resize mid-capture invalidates the geometry.
   function checkScaleConsistency(scales, tolerance = 0.01) {
@@ -175,11 +409,17 @@
   return {
     MAX_CANVAS_SIDE,
     MAX_CANVAS_PIXELS,
+    SEAM,
     clamp,
     planScrollPositions,
     CaptureWalk,
     resolveFrameLayout,
     checkOutputBudget,
+    shellComposite,
+    fitOutputScale,
     checkScaleConsistency,
+    meanChannelDiff,
+    findSeamShift,
+    planSeamProbe,
   };
 });

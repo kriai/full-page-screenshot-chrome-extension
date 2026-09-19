@@ -56,6 +56,7 @@
     .panel {
       width: 268px;
     }
+    .panel[hidden] { display: none; }
     .primary-action {
       display: flex;
       align-items: center;
@@ -185,6 +186,101 @@
       animation: dots 1100ms steps(4, end) infinite;
       vertical-align: bottom;
     }
+    .capture-state {
+      display: none;
+      width: 268px;
+      height: 212px;
+      align-items: center;
+      flex-direction: column;
+      justify-content: center;
+      text-align: center;
+    }
+    .capture-state.active { display: flex; }
+    .capture-visual {
+      position: relative;
+      width: 58px;
+      height: 58px;
+      margin-bottom: 18px;
+      overflow: hidden;
+      border: 1px solid #52617A;
+      border-radius: 14px;
+      background: #1B2432;
+      color: #8EA8F5;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
+    }
+    .capture-visual svg {
+      position: absolute;
+      top: 15px;
+      left: 15px;
+      width: 28px;
+      height: 28px;
+    }
+    .capture-scan {
+      position: absolute;
+      right: 8px;
+      left: 8px;
+      height: 2px;
+      border-radius: 99px;
+      background: #78A0FF;
+      box-shadow: 0 0 10px rgba(120, 160, 255, 0.85);
+      animation: capture-scan 1300ms cubic-bezier(.45, 0, .55, 1) infinite;
+    }
+    .capture-label {
+      max-width: 244px;
+      font-size: 16px;
+      font-weight: 650;
+      line-height: 1.25;
+    }
+    .capture-detail {
+      min-height: 30px;
+      max-width: 244px;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .progress-meta {
+      display: flex;
+      justify-content: space-between;
+      width: 244px;
+      margin-top: 15px;
+      color: var(--muted);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+    .progress-track {
+      width: 244px;
+      height: 8px;
+      margin-top: 7px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #2A3547;
+    }
+    .progress-fill {
+      position: relative;
+      width: 2%;
+      height: 100%;
+      overflow: hidden;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #3869D9, #78A0FF);
+      transition: width 260ms cubic-bezier(.2, .8, .2, 1);
+    }
+    .progress-fill::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      width: 45%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,.48), transparent);
+      animation: progress-shine 1100ms ease-in-out infinite;
+    }
+    @keyframes capture-scan {
+      0%, 100% { top: 9px; opacity: .55; }
+      50% { top: 47px; opacity: 1; }
+    }
+    @keyframes progress-shine {
+      from { transform: translateX(-120%); }
+      to { transform: translateX(240%); }
+    }
     @keyframes dots {
       to { width: 1.2em; }
     }
@@ -201,7 +297,7 @@
   </style>
 </head>
 <body>
-  <main class="panel" aria-label="Screenshot actions">
+  <main class="panel" id="capture-actions" aria-label="Screenshot actions">
     <button class="primary-action" data-mode="fullPage" title="Capture and stitch the full page (Alt-click to choose which area scrolls)">
       <span class="icon" aria-hidden="true">
         <svg viewBox="0 0 32 32" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -261,6 +357,25 @@
       </span>
     </button>
   </main>
+  <section class="capture-state" id="capture-state" aria-live="polite" aria-label="Capture progress">
+    <div class="capture-visual" aria-hidden="true">
+      <svg viewBox="0 0 32 32" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 4.5h9.5L24 10v17.5H9V4.5Z"></path>
+        <path d="M18.5 4.5V10H24"></path>
+        <path d="M12.5 16h7M12.5 20h7"></path>
+      </svg>
+      <span class="capture-scan"></span>
+    </div>
+    <div class="capture-label" id="capture-label">Preparing page</div>
+    <div class="capture-detail" id="capture-detail">Finding the page content to capture</div>
+    <div class="progress-meta">
+      <span id="capture-count">Starting</span>
+      <span id="capture-percent">2%</span>
+    </div>
+    <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="2">
+      <div class="progress-fill" id="capture-progress"></div>
+    </div>
+  </section>
   <div id="status"></div>
   <script src="popup.js"></script>
 </body>
