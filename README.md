@@ -35,9 +35,8 @@ export controls.
 - Reopen saved history items as editable projects with annotations and export
   layout settings preserved.
 - Preview the active annotation style before drawing.
-- On-page capture progress appears once before the capture and once after it,
-  and never flashes between frames: while frames are being taken the toolbar
-  icon carries the count and the hover tooltip carries the detail.
+- The popup becomes a live animated progress view during capture. If it is
+  closed, capture continues and the toolbar icon carries the section count.
 
 ## How it works
 
@@ -51,13 +50,15 @@ export controls.
   settle detection, per-frame geometry, occlusion handling, the click-to-select
   picker, and an idempotent restore.
 - `capture-geometry.js` holds the pure geometry shared by the worker, the viewer
-  and the tests: scroll planning, overlap trimming, gap detection and canvas
-  budgets.
-- Frames are handed to `viewer.html` through `chrome.storage.local`
-  (data URLs are large, hence the `unlimitedStorage` permission).
-- `viewer.js` stitches or crops the captured frame data onto an editable canvas
-  at the captured pixel scale, applies annotations, then prepares clipboard,
-  PNG, JPEG, and PDF outputs.
+  and the tests: scroll planning, overlap trimming, gap detection, seam
+  alignment and canvas budgets.
+- Full-page frames are stitched incrementally into an `OffscreenCanvas` in the
+  service worker while capture is still running. The finished PNG is saved to
+  history before `viewer.html` opens, so the editor loads one ready image rather
+  than decoding and joining every viewport itself. If worker-side canvas work
+  fails, the raw-frame viewer path remains as a fallback.
+- `viewer.js` loads the prepared image onto an editable canvas, applies
+  annotations, then prepares clipboard, PNG, JPEG, and PDF outputs.
 
 ### Full-page capture details
 
@@ -96,14 +97,67 @@ export controls.
 - **Explicit stitching.** Every frame records the viewport rectangle it read and
   the content offset it belongs at, so overlap is trimmed deterministically and
   missing rows are reported instead of silently dropped.
+- **The page is held still first.** Between the first frame and the last, a
+  live page keeps moving: entrance animations play, spinners turn, videos run,
+  and scroll-linked effects slide things under the camera. Before anything is
+  measured the page is pinned down - finite animations are run to their
+  finished state rather than switched off, since a scroll-reveal effect that is
+  merely cancelled snaps back to the `opacity: 0` it started from; endless ones
+  are parked; video is paused; parallax is fixed in place. Cookie scrims and
+  modal dialogs, which otherwise cover content in every single frame, are
+  identified by shape rather than by class name and taken out of the shot. All
+  of it is recorded and reversed afterwards.
+- **An app shell is captured as a window, not a column.** Where the page
+  scrolls a pane inside fixed furniture - a sidebar, a header, a composer - the
+  finished image is the whole window, not the bare pane. The pane's content is
+  stitched as usual and the furniture is painted around it once: the header
+  keeps its place above, the sidebar beside, and whatever sits below the pane
+  is moved to the foot of the image rather than repeating down the middle of
+  it. The side columns only carry as far as the furniture was ever on screen,
+  which is one viewport.
+- **Full-height side rails are kept, not deleted.** A navigation rail pinned to
+  the viewport cannot simply be hidden - that removes a real column of the
+  page - and cannot be left fixed, or it repeats down every frame. It is
+  re-pinned to the document where it currently sits, so it renders once, in
+  full. Bottom-pinned bars are hidden while scrolling past and restored for the
+  final frame, where they belong.
+- **Seams checked against the pixels.** A frame's offset comes from `scrollTop`,
+  which assumes the page moved exactly as far as it was asked to. Sub-pixel
+  rounding, scroll anchoring and a late-settling row all break that quietly. So
+  each frame's overlap is compared against the previous frame's and slid to the
+  offset that actually lines up; a join still wrong after that has its frame
+  re-taken, up to three times per capture. Repetitive content that offers no
+  single convincing match is left where the arithmetic put it.
+- **Content that loads in above the viewport.** A comment thread or feed can
+  prepend rows mid-capture, pushing everything below them down the document
+  while `scrollTop` stays put - every frame already taken is then recorded
+  against coordinates that no longer exist. One element near the foot of the
+  viewport is tracked across frames, and any jump in its absolute position is
+  taken out of the offsets handed to the viewer. Large jumps are only believed
+  when the document grew to match, so a route change is not mistaken for a
+  shift.
+- **Pages taller than a canvas are fitted, not cut.** Chrome will not allocate
+  a canvas past 32767px on a side, which a long page passes easily. Given the
+  choice between the whole page slightly reduced and a sharp fragment of it,
+  the stitcher scales the output down to fit and says by how much. Only a page
+  that would need reducing past a fifth is refused.
+- **The editor opens with a finished image.** Each frame is added to the worker's
+  canvas as soon as its seam has been checked. At the end that canvas is encoded
+  and stored once as both the capture and its initial history entry; only then
+  is the editor tab opened. This avoids a blank editor waiting to decode,
+  stitch, re-encode, and save the same screenshot a second time.
 - **Bounded failures.** Time, frame count, page height and canvas budgets stop
   runaway pages; the viewer then says the capture is partial and why. Capture is
   cancelled if the tab navigates, closes, or stops being the active tab.
-- **Progress without flicker.** Every frame is photographed, so nothing drawn on
-  the page can be visible while the loop runs. The panel therefore shows once up
-  front - section count, rough duration, "keep this tab active" - fades out for
-  the whole loop, and returns for stitching. During the loop the toolbar badge
-  shows `12/50` and its tooltip the percentage; neither can land in a shot.
+- **Progress without flicker.** Every frame is photographed, so progress stays
+  in the extension popup instead of being drawn over the page. Its animated bar
+  tracks captured sections. If the popup closes, the toolbar badge shows
+  `12/50` and its tooltip the percentage; neither can land in a shot.
+- **Resilient capture handoff.** While the progress popup stays open, it takes
+  viewport snapshots for the service worker. Chrome can enforce its global
+  screenshot quota on either caller, so temporary quota refusals are waited out
+  and retried instead of failing the capture. Closing the popup is safe: the
+  worker path takes over automatically.
 
 ## Tests
 

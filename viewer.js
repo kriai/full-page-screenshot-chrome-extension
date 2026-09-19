@@ -212,6 +212,17 @@ function drawCapture(capture, images, report = {}) {
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
 
+  // Full-page captures are normally handed over as one worker-stitched PNG.
+  // Loading it is the same cheap path as a visible-area screenshot; preserve
+  // the stitch report so partial/downscaled notices still reach the user.
+  if (capture.prestitched) {
+    canvas.width = images[0].width;
+    canvas.height = images[0].height;
+    ctx.drawImage(images[0], 0, 0);
+    Object.assign(report, capture.prestitchedReport || {});
+    return canvas;
+  }
+
   if (mode === "selection" && cropRect) {
     const sx = Math.round(cropRect.left * scale);
     const sy = Math.round(cropRect.top * scale);
@@ -240,14 +251,58 @@ function drawCapture(capture, images, report = {}) {
         "The page zoom or window size changed while capturing, so sections may not line up.";
     }
 
-    const layout = FpsGeometry.resolveFrameLayout(frames, { scale: consistency.scale });
-    const budget = FpsGeometry.checkOutputBudget(layout.width, layout.height);
-    if (!budget.ok) throw new Error(budget.message);
+    let layout = FpsGeometry.resolveFrameLayout(frames, { scale: consistency.scale });
 
-    canvas.width = layout.width;
-    canvas.height = layout.height;
+    // A tall page can capture cleanly and still be too big to hand over as one
+    // image - Chrome will not allocate a canvas past 32767px on a side. Given
+    // the choice between the whole page slightly reduced and a sharp fragment
+    // of it, the whole page is what was asked for, so it is fitted rather than
+    // cut off.
+    if (!FpsGeometry.checkOutputBudget(layout.width, layout.height).ok) {
+      const fit = FpsGeometry.fitOutputScale(layout.width, layout.height);
+      if (!fit) {
+        throw new Error(FpsGeometry.checkOutputBudget(layout.width, layout.height).message);
+      }
+      layout = FpsGeometry.resolveFrameLayout(frames, {
+        scale: consistency.scale,
+        outputScale: fit,
+      });
+      const budget = FpsGeometry.checkOutputBudget(layout.width, layout.height);
+      if (!budget.ok) throw new Error(budget.message);
+      report.downscaled = fit;
+    }
+
+    // An app shell scrolls a pane inside a window of furniture. The pane is
+    // what the layout above describes; the sidebar, header and composer around
+    // it are static, so they are painted once rather than repeated down every
+    // frame. Offsets put the pane back where it sits in the window.
+    const shell = capture.layout?.shell;
+    const box = shell ? FpsGeometry.shellComposite(shell, layout, consistency.scale) : null;
+    const paneX = box ? box.paneX : 0;
+    const paneY = box ? box.paneY : 0;
+
+    canvas.width = box ? box.width : layout.width;
+    canvas.height = box ? box.height : layout.height;
     ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingQuality = "high";
+
+    // The furniture first, from the opening frame: everything outside the pane
+    // is drawn, then the pane's own content is laid over the top of it.
+    if (box && images[0]) {
+      ctx.drawImage(
+        images[0],
+        0,
+        0,
+        images[0].width,
+        images[0].height,
+        0,
+        0,
+        box.viewportWidth,
+        box.viewportHeight
+      );
+    }
+
     for (const draw of layout.draws) {
       ctx.drawImage(
         images[draw.index],
@@ -255,14 +310,40 @@ function drawCapture(capture, images, report = {}) {
         draw.sy,
         draw.sw,
         draw.sh,
-        draw.dx,
-        draw.dy,
-        draw.sw,
-        draw.sh
+        draw.dx + paneX,
+        draw.dy + paneY,
+        draw.dw,
+        draw.dh
       );
     }
+
+    // Anything below the pane - a composer, a toolbar - belongs at the foot of
+    // the finished image, taken from the last frame, where it is showing the
+    // end of the content rather than the middle.
+    if (box && box.footerHeight > 0) {
+      const last = images[images.length - 1];
+      const srcTop = Math.round(
+        (shell.pane.top + shell.pane.height) * (last.width / frames[frames.length - 1].viewportWidth)
+      );
+      const srcHeight = Math.max(0, last.height - srcTop);
+      if (srcHeight > 0) {
+        ctx.drawImage(
+          last,
+          0,
+          srcTop,
+          last.width,
+          srcHeight,
+          0,
+          paneY + layout.height,
+          box.viewportWidth,
+          box.footerHeight
+        );
+      }
+    }
+
     report.gaps = layout.gaps;
     report.capturedHeight = layout.contentHeight;
+    report.shell = !!shell;
     return canvas;
   }
 
@@ -2366,10 +2447,13 @@ async function autoSaveHistory(capture) {
     url: capture.pageUrl || "",
     width: outputCanvas.width,
   });
+  const keptHistory = history.slice(0, limit);
+  const staleImageKeys = history.slice(limit).map((entry) => entry.imageKey).filter(Boolean);
   await chrome.storage.local.set({
-    history: history.slice(0, limit),
+    history: keptHistory,
     historyLimit: limit,
   });
+  if (staleImageKeys.length) await chrome.storage.local.remove(staleImageKeys);
   editor.historyReady = true;
 }
 
@@ -2380,9 +2464,10 @@ async function saveProjectToHistory() {
   const index = history.findIndex((entry) => entry.baseName === editor.baseName);
   if (index < 0) return;
 
+  const project = cloneProject();
   history[index] = {
     ...history[index],
-    project: cloneProject(),
+    project,
     updatedAt: Date.now(),
   };
   await chrome.storage.local.set({ history });
@@ -2395,15 +2480,21 @@ async function saveRenderedProjectToHistory(outputCanvas) {
   const index = history.findIndex((entry) => entry.baseName === editor.baseName);
   if (index < 0) return;
 
-  history[index] = {
+  const dataUrl = outputCanvas.toDataURL("image/png");
+  const project = cloneProject();
+  const updatedEntry = {
     ...history[index],
-    dataUrl: outputCanvas.toDataURL("image/png"),
     height: outputCanvas.height,
-    project: cloneProject(),
+    project,
     updatedAt: Date.now(),
     width: outputCanvas.width,
   };
-  await chrome.storage.local.set({ history });
+  if (history[index].imageKey) delete updatedEntry.dataUrl;
+  else updatedEntry.dataUrl = dataUrl;
+  history[index] = updatedEntry;
+  const update = { history };
+  if (history[index].imageKey) update[history[index].imageKey] = dataUrl;
+  await chrome.storage.local.set(update);
 }
 
 function scheduleProjectHistorySave() {
@@ -2442,6 +2533,13 @@ function captureNotice(capture, report) {
     parts.push(`Partial capture: ${capture.truncated.message}`);
   }
   if (report.scaleWarning) parts.push(report.scaleWarning);
+  if (report.downscaled) {
+    parts.push(
+      `The page was taller than a single image can be, so it was scaled to ${Math.round(
+        report.downscaled * 100
+      )}% to fit rather than cut short.`
+    );
+  }
   if (report.gaps?.length) {
     const missing = report.gaps.reduce((sum, gap) => sum + (gap.to - gap.from), 0);
     parts.push(`${Math.round(missing)}px of the page could not be captured.`);
@@ -2451,12 +2549,37 @@ function captureNotice(capture, report) {
 
 async function main() {
   const status = document.getElementById("status");
-  const { capture } = await chrome.storage.local.get("capture");
+  const stored = await chrome.storage.local.get("capture");
+  let capture = stored.capture;
   if (!capture) {
     status.classList.remove("loading");
     status.textContent =
       "No capture found. Click the extension button on a page first.";
     return;
+  }
+
+  if (capture.prestitched && !capture.frames?.length) {
+    const storedImage = capture.imageKey
+      ? await chrome.storage.local.get(capture.imageKey)
+      : {};
+    let dataUrl = capture.imageKey ? storedImage[capture.imageKey] : "";
+    let entry = null;
+    if (!dataUrl) {
+      const { history = [] } = await chrome.storage.local.get("history");
+      entry = history.find((item) => item.baseName === capture.baseName);
+      dataUrl = entry?.dataUrl || "";
+    }
+    if (!dataUrl) throw new Error("The prepared screenshot could not be found in history.");
+    capture = {
+      ...capture,
+      frames: [{ x: 0, y: 0, dataUrl }],
+      metrics: {
+        ...capture.metrics,
+        viewportWidth: entry?.width || capture.prestitchedReport?.width || capture.metrics.viewportWidth,
+        viewportHeight: entry?.height || capture.prestitchedReport?.height || capture.metrics.viewportHeight,
+        dpr: 1,
+      },
+    };
   }
 
   const { frames, pageTitle } = capture;
@@ -2468,7 +2591,8 @@ async function main() {
   status.textContent = "Stitching screenshot";
   const stitchReport = {};
   editor.baseCanvas = drawCapture(capture, images, stitchReport);
-  editor.projectBaseDataUrl = capture.project?.baseDataUrl || "";
+  editor.projectBaseDataUrl =
+    capture.project?.baseDataUrl || (capture.prestitched ? frames[0].dataUrl : "");
   editor.baseDisplayCanvas = document.getElementById("baseDisplayCanvas");
   editor.baseDisplayCtx = editor.baseDisplayCanvas.getContext("2d");
   editor.canvas = document.getElementById("editorCanvas");
@@ -2487,9 +2611,9 @@ async function main() {
   setupDownloadActions(baseName);
   await setupCopyButton();
   await setupUploadButton();
-  if (capture.fromHistory) {
+  if (capture.fromHistory || capture.historySaved) {
     editor.historyReady = true;
-    await saveProjectToHistory();
+    if (capture.fromHistory) await saveProjectToHistory();
   } else {
     status.textContent = "Saving to history";
     await autoSaveHistory(capture);

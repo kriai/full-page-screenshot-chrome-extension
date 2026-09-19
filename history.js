@@ -1,10 +1,21 @@
 async function loadHistory() {
   const { history = [] } = await chrome.storage.local.get("history");
-  return history;
+  const imageKeys = history.map((entry) => entry.imageKey).filter(Boolean);
+  const images = imageKeys.length ? await chrome.storage.local.get(imageKeys) : {};
+  return history.map((entry) => ({
+    ...entry,
+    dataUrl: entry.dataUrl || (entry.imageKey ? images[entry.imageKey] : "") || "",
+  }));
 }
 
 async function saveHistory(history) {
-  await chrome.storage.local.set({ history });
+  await chrome.storage.local.set({
+    history: history.map((entry) => {
+      if (!entry.imageKey) return entry;
+      const { dataUrl: _hydratedDataUrl, ...metadata } = entry;
+      return metadata;
+    }),
+  });
 }
 
 function wait(ms) {
@@ -60,24 +71,32 @@ function formatRemaining(ms) {
 async function openInEditor(entry) {
   const project = entry.project || null;
   const dataUrl = project?.baseDataUrl || entry.dataUrl;
-  await chrome.storage.local.set({
-    capture: {
-      baseName: entry.baseName || "screenshot",
-      capturedAt: entry.savedAt || Date.now(),
-      frames: [{ x: 0, y: 0, dataUrl }],
-      fromHistory: true,
-      metrics: {
-        viewportWidth: project?.baseWidth || entry.width,
-        viewportHeight: project?.baseHeight || entry.height,
-        dpr: 1,
-        originalScrollX: 0,
-        originalScrollY: 0,
-      },
-      mode: "visible",
-      pageTitle: entry.title || "Screenshot",
-      pageUrl: entry.url || "",
-      project,
+  const keyed = !!entry.imageKey && !project?.baseDataUrl;
+  const capture = {
+    baseName: entry.baseName || "screenshot",
+    capturedAt: entry.savedAt || Date.now(),
+    frames: keyed ? [] : [{ x: 0, y: 0, dataUrl }],
+    fromHistory: true,
+    historySaved: true,
+    metrics: {
+      viewportWidth: project?.baseWidth || entry.width,
+      viewportHeight: project?.baseHeight || entry.height,
+      dpr: 1,
+      originalScrollX: 0,
+      originalScrollY: 0,
     },
+    mode: "visible",
+    pageTitle: entry.title || "Screenshot",
+    pageUrl: entry.url || "",
+    project,
+  };
+  if (keyed) {
+    capture.imageKey = entry.imageKey;
+    capture.prestitched = true;
+    capture.prestitchedReport = { height: entry.height, width: entry.width };
+  }
+  await chrome.storage.local.set({
+    capture,
   });
   await chrome.tabs.create({ url: chrome.runtime.getURL("viewer.html") });
 }
@@ -292,8 +311,9 @@ function render(history) {
       card.classList.add("removing");
       await wait(140);
       const next = await loadHistory();
-      next.splice(index, 1);
+      const [deleted] = next.splice(index, 1);
       await saveHistory(next);
+      if (deleted?.imageKey) await chrome.storage.local.remove(deleted.imageKey);
       render(next);
     };
     remove.addEventListener("click", async () => {
@@ -341,6 +361,8 @@ document.getElementById("clearAll").addEventListener("click", async () => {
     return;
   }
   await saveHistory([]);
+  const imageKeys = history.map((entry) => entry.imageKey).filter(Boolean);
+  if (imageKeys.length) await chrome.storage.local.remove(imageKeys);
   render([]);
 });
 
@@ -352,8 +374,12 @@ async function setupLimit() {
   input.addEventListener("change", async () => {
     const limit = normalizeHistoryLimit(input.value);
     input.value = String(limit);
-    const history = (await loadHistory()).slice(0, limit);
-    await chrome.storage.local.set({ history, historyLimit: limit });
+    const allHistory = await loadHistory();
+    const history = allHistory.slice(0, limit);
+    await saveHistory(history);
+    await chrome.storage.local.set({ historyLimit: limit });
+    const staleImageKeys = allHistory.slice(limit).map((entry) => entry.imageKey).filter(Boolean);
+    if (staleImageKeys.length) await chrome.storage.local.remove(staleImageKeys);
     render(history);
   });
 }
