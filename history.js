@@ -1,21 +1,54 @@
+// Metadata only: images are read from the image store when a card needs one.
 async function loadHistory() {
+  await FpsImages.migrateLegacyHistory().catch((err) => console.warn("History migration failed:", err));
   const { history = [] } = await chrome.storage.local.get("history");
-  const imageKeys = history.map((entry) => entry.imageKey).filter(Boolean);
-  const images = imageKeys.length ? await chrome.storage.local.get(imageKeys) : {};
-  return history.map((entry) => ({
-    ...entry,
-    dataUrl: entry.dataUrl || (entry.imageKey ? images[entry.imageKey] : "") || "",
-  }));
+  return history;
 }
 
 async function saveHistory(history) {
-  await chrome.storage.local.set({
-    history: history.map((entry) => {
-      if (!entry.imageKey) return entry;
-      const { dataUrl: _hydratedDataUrl, ...metadata } = entry;
-      return metadata;
-    }),
-  });
+  await chrome.storage.local.set({ history });
+}
+
+// Object URLs handed to the current cards, released on every re-render.
+let cardUrls = [];
+
+function releaseCardUrls() {
+  for (const url of cardUrls) URL.revokeObjectURL(url);
+  cardUrls = [];
+}
+
+// The card preview. Entries saved before thumbnails existed get one made from
+// their image the first time they are shown, and keep it.
+async function showThumbnail(img, entry) {
+  let blob = await FpsImages.get(entry.thumbKey);
+  if (!blob) {
+    const full = await FpsImages.get(entry.imageKey);
+    if (!full) return;
+    blob = await FpsImages.makeThumbnail(full);
+    const thumbKey = `thumb:${entry.id || FpsImages.newId()}`;
+    await FpsImages.put(thumbKey, blob);
+    const { history = [] } = await chrome.storage.local.get("history");
+    const at = history.findIndex((item) => item.imageKey === entry.imageKey);
+    if (at >= 0) {
+      history[at] = { ...history[at], thumbKey };
+      await chrome.storage.local.set({ history });
+    }
+    entry.thumbKey = thumbKey;
+  }
+  const url = URL.createObjectURL(blob);
+  cardUrls.push(url);
+  img.src = url;
+}
+
+async function downloadEntry(entry) {
+  const blob = await FpsImages.get(entry.imageKey);
+  if (!blob) throw new Error("The saved image is missing.");
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename(entry);
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 function wait(ms) {
@@ -70,14 +103,21 @@ function formatRemaining(ms) {
 
 async function openInEditor(entry) {
   const project = entry.project || null;
-  const dataUrl = project?.baseDataUrl || entry.dataUrl;
-  const keyed = !!entry.imageKey && !project?.baseDataUrl;
+  const baseKey = entry.baseKey || entry.imageKey;
   const capture = {
     baseName: entry.baseName || "screenshot",
     capturedAt: entry.savedAt || Date.now(),
-    frames: keyed ? [] : [{ x: 0, y: 0, dataUrl }],
+    frames: [],
     fromHistory: true,
     historySaved: true,
+    historyId: entry.id || "",
+    imageKey: entry.imageKey,
+    baseKey,
+    prestitched: true,
+    prestitchedReport: {
+      height: project?.baseHeight || entry.height,
+      width: project?.baseWidth || entry.width,
+    },
     metrics: {
       viewportWidth: project?.baseWidth || entry.width,
       viewportHeight: project?.baseHeight || entry.height,
@@ -90,11 +130,6 @@ async function openInEditor(entry) {
     pageUrl: entry.url || "",
     project,
   };
-  if (keyed) {
-    capture.imageKey = entry.imageKey;
-    capture.prestitched = true;
-    capture.prestitchedReport = { height: entry.height, width: entry.width };
-  }
   await chrome.storage.local.set({
     capture,
   });
@@ -179,6 +214,7 @@ function render(history) {
   const empty = document.getElementById("empty");
   const clearAll = document.getElementById("clearAll");
   grid.textContent = "";
+  releaseCardUrls();
   empty.hidden = history.length > 0;
   clearAll.disabled = history.length === 0;
 
@@ -190,7 +226,7 @@ function render(history) {
 
     const img = document.createElement("img");
     img.className = "thumb";
-    img.src = entry.dataUrl;
+    showThumbnail(img, entry).catch((err) => console.warn("Unable to show a thumbnail:", err));
     img.alt = entry.title || "Saved screenshot";
     img.title = "Open saved screenshot in the editor";
     img.addEventListener("click", async () => {
@@ -270,9 +306,13 @@ function render(history) {
     actions.className = "actions";
 
     const download = document.createElement("a");
-    download.href = entry.dataUrl;
+    download.href = "#";
     download.download = filename(entry);
     makeIconControl(download, "download", "Download PNG");
+    download.addEventListener("click", (event) => {
+      event.preventDefault();
+      downloadEntry(entry).catch((err) => console.error("Unable to download:", err));
+    });
 
     const edit = document.createElement("button");
     edit.type = "button";
@@ -313,7 +353,7 @@ function render(history) {
       const next = await loadHistory();
       const [deleted] = next.splice(index, 1);
       await saveHistory(next);
-      if (deleted?.imageKey) await chrome.storage.local.remove(deleted.imageKey);
+      await FpsImages.remove(FpsImages.entryKeys(deleted));
       render(next);
     };
     remove.addEventListener("click", async () => {
@@ -361,8 +401,7 @@ document.getElementById("clearAll").addEventListener("click", async () => {
     return;
   }
   await saveHistory([]);
-  const imageKeys = history.map((entry) => entry.imageKey).filter(Boolean);
-  if (imageKeys.length) await chrome.storage.local.remove(imageKeys);
+  await FpsImages.remove(history.flatMap(FpsImages.entryKeys));
   render([]);
 });
 
@@ -378,8 +417,7 @@ async function setupLimit() {
     const history = allHistory.slice(0, limit);
     await saveHistory(history);
     await chrome.storage.local.set({ historyLimit: limit });
-    const staleImageKeys = allHistory.slice(limit).map((entry) => entry.imageKey).filter(Boolean);
-    if (staleImageKeys.length) await chrome.storage.local.remove(staleImageKeys);
+    await FpsImages.remove(allHistory.slice(limit).flatMap(FpsImages.entryKeys));
     render(history);
   });
 }

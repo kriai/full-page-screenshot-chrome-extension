@@ -13,7 +13,7 @@
 // an old baseline. Results and images go to build/benchmark/ (not tracked).
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { capture, launch, REPO_ROOT } from "../test/e2e/harness.mjs";
+import { capture, lastImageBase64, launch, REPO_ROOT } from "../test/e2e/harness.mjs";
 
 function parseArgs(argv) {
   const out = { dpr: 1, label: "run", only: null, compare: null, images: true, parallel: 4 };
@@ -73,10 +73,8 @@ async function captureSite(harness, site, { outDir, images }) {
       }),
       300000
     );
-    const image = result.prestitched?.dataUrl || result.frameDataUrl;
-    if (images && image) {
-      writeFileSync(join(outDir, `${site.id}.png`), Buffer.from(image.split(",")[1], "base64"));
-    }
+    const image = images && result.hasImage ? await lastImageBase64(harness) : null;
+    if (image) writeFileSync(join(outDir, `${site.id}.png`), Buffer.from(image, "base64"));
     if (result.diagnostics) {
       writeFileSync(join(outDir, `${site.id}.diagnostics.json`), JSON.stringify(result.diagnostics, null, 1));
     }

@@ -42,9 +42,8 @@ async function captureFixture(
     await page.waitForLoadState("load");
     const result = await capture(harness, page, { mode, pick, diagnostics: true });
     assert.equal(result.error, null, `capture failed: ${result.error}`);
-    const dataUrl = result.prestitched?.dataUrl || result.frameDataUrl;
-    assert.ok(dataUrl, "the capture produced no image");
-    const decoded = await decodeRows(harness, dataUrl);
+    assert.ok(result.hasImage, "the capture produced no image");
+    const decoded = await decodeRows(harness);
     const restored = await page.evaluate(() => ({
       leftovers: document.querySelectorAll("[data-fps-ui], [data-fps-prev-visibility]").length,
       scrollY: window.scrollY,

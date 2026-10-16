@@ -1,5 +1,14 @@
-// Shared geometry helpers (also used by the viewer and the node tests).
-importScripts("capture-geometry.js");
+// Shared geometry helpers (also used by the viewer and the node tests), and
+// the IndexedDB image store shared with the editor and the history page.
+importScripts("capture-geometry.js", "image-store.js");
+
+// Every time the worker starts: move history saved by older versions into the
+// image store, then drop images nothing refers to any more (frames of a run
+// whose worker was stopped mid-capture). Both are idempotent. Kept as a
+// promise so anything that must not race it (the tests) can wait.
+const imageStoreUpkeep = FpsImages.migrateLegacyHistory()
+  .then(() => FpsImages.sweepOrphans())
+  .catch((err) => console.warn("Image store upkeep failed:", err));
 
 let capturePopup = null;
 let popupCaptureToken = 0;
@@ -168,7 +177,7 @@ async function captureVisibleArea(tab) {
   });
 
   const metrics = await getVisibleMetrics(tabId);
-  const dataUrl = await captureVisibleTabRateLimited(tab.windowId);
+  const frameKey = await storeFrame(await captureVisibleTabRateLimited(tab.windowId));
   reportCaptureProgress({
     percent: 96,
     label: "Preparing editor",
@@ -177,7 +186,7 @@ async function captureVisibleArea(tab) {
   });
 
   await saveCapture(tab, {
-    frames: [{ x: 0, y: 0, dataUrl }],
+    frames: [{ x: 0, y: 0, key: frameKey }],
     metrics,
     mode: "visible",
   });
@@ -207,13 +216,13 @@ async function captureSelectedArea(tab) {
 
   await updateCaptureBadge(tabId, { text: "1/1", title: "Capturing the selected area" });
   const metrics = await getVisibleMetrics(tabId);
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-    format: "png",
-  });
+  const frameKey = await storeFrame(
+    await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" })
+  );
 
   await saveCapture(tab, {
     cropRect: selection,
-    frames: [{ x: 0, y: 0, dataUrl }],
+    frames: [{ x: 0, y: 0, key: frameKey }],
     metrics,
     mode: "selection",
   });
@@ -595,9 +604,17 @@ async function captureVisibleTabRateLimited(windowId) {
 const MAX_SEAM_RETRIES = 3;
 const SEAM_RETRY_SETTLE_MS = 150;
 
-async function decodeFrame(dataUrl) {
-  const blob = await (await fetch(dataUrl)).blob();
+// Accepts a data URL straight from captureVisibleTab or a stored Blob.
+async function decodeFrame(source) {
+  const blob = typeof source === "string" ? await FpsImages.blobFromDataUrl(source) : source;
   return createImageBitmap(blob);
+}
+
+// Put a screenshot in the image store and return its key, so the capture
+// keeps a short string per frame instead of a multi-megabyte data URL.
+async function storeFrame(dataUrl, key = `frame:${FpsImages.newId()}`) {
+  await FpsImages.put(key, await FpsImages.blobFromDataUrl(dataUrl));
+  return key;
 }
 
 // Read one band of a screenshot as RGBA, squashed to SEAM.sampleWidth columns.
@@ -747,21 +764,6 @@ async function repairSeam({ dataUrl, measured, prevMeasured, prevBitmap, retries
  * the old viewer-side path rather than being a second geometry algorithm.
  * ------------------------------------------------------------------------ */
 
-function bytesToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  const chunk = 49152;
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(bytes.length, offset + chunk)));
-  }
-  return btoa(binary);
-}
-
-async function canvasDataUrl(canvas) {
-  const blob = await canvas.convertToBlob({ type: "image/png" });
-  return `data:image/png;base64,${bytesToBase64(await blob.arrayBuffer())}`;
-}
-
 class IncrementalStitcher {
   constructor(target) {
     this.target = target;
@@ -770,8 +772,10 @@ class IncrementalStitcher {
     this.ctx = null;
     this.scale = 0;
     this.outputScale = 1;
-    this.firstDataUrl = "";
-    this.lastDataUrl = "";
+    // Keys of the first and last frames: an app shell's furniture is painted
+    // from them when the stitch is finished.
+    this.firstKey = "";
+    this.lastKey = "";
     this.shell = null;
     this.failed = null;
     this.gaps = [];
@@ -833,7 +837,7 @@ class IncrementalStitcher {
     if (this.failed) return;
     let ownedBitmap = null;
     try {
-      const image = bitmap || (ownedBitmap = await decodeFrame(frame.dataUrl));
+      const image = bitmap || (ownedBitmap = await decodeFrame(await FpsImages.get(frame.key)));
       const scale = frame.viewportWidth > 0 ? image.width / frame.viewportWidth : frame.dpr;
       if (!(scale > 0)) throw new Error("The captured frame has no usable pixel scale.");
       if (!this.scale) this.scale = scale;
@@ -878,8 +882,8 @@ class IncrementalStitcher {
         draw.dw,
         draw.dh
       );
-      if (!this.firstDataUrl) this.firstDataUrl = frame.dataUrl;
-      this.lastDataUrl = frame.dataUrl;
+      if (!this.firstKey) this.firstKey = frame.key;
+      this.lastKey = frame.key;
     } catch (err) {
       this.failed = err;
       console.warn("Incremental stitching disabled for this capture:", err);
@@ -914,7 +918,7 @@ class IncrementalStitcher {
     let last = null;
     try {
       if (box) {
-        first = await decodeFrame(this.firstDataUrl);
+        first = await decodeFrame(await FpsImages.get(this.firstKey));
         ctx.drawImage(
           first,
           0,
@@ -940,7 +944,7 @@ class IncrementalStitcher {
       );
 
       if (box && box.footerHeight > 0) {
-        last = await decodeFrame(this.lastDataUrl);
+        last = await decodeFrame(await FpsImages.get(this.lastKey));
         const finalFrame = this.frames[this.frames.length - 1];
         const frameScale = last.width / finalFrame.viewportWidth;
         const srcTop = Math.round(
@@ -962,9 +966,9 @@ class IncrementalStitcher {
         }
       }
 
-      const dataUrl = await canvasDataUrl(output);
+      const blob = await output.convertToBlob({ type: "image/png" });
       return {
-        dataUrl,
+        blob,
         width,
         height,
         downscaled: this.outputScale < 1 ? this.outputScale : 0,
@@ -995,6 +999,11 @@ function beginSession(tab) {
     tabId: tab.id,
     windowId: tab.windowId,
     url: tab.url || "",
+    runId: FpsImages.newId(),
+    // Frames written to the image store, and whether the editor has taken
+    // them over; anything not handed off is deleted when the run ends.
+    frameKeys: [],
+    handedOff: false,
     startedAt: Date.now(),
     canceledReason: "",
   };
@@ -1056,16 +1065,27 @@ async function injectPageEngine(tabId) {
   });
 }
 
+// Chrome's wording when the document a script was aimed at went away under
+// it: the page reloaded or navigated mid-call.
+const PAGE_REPLACED = /Frame with ID \d+ was removed|No frame with id|frame was removed|showing error page/i;
+
 // Call one of the page-side helpers published by capture-page.js.
 async function callPage(tabId, method, payload = null) {
-  return exec(
-    tabId,
-    (name, arg) => {
-      const api = globalThis.__fpsPage;
-      return api && api[name] ? api[name](arg) : null;
-    },
-    [method, payload]
-  );
+  try {
+    return await exec(
+      tabId,
+      (name, arg) => {
+        const api = globalThis.__fpsPage;
+        return api && api[name] ? api[name](arg) : null;
+      },
+      [method, payload]
+    );
+  } catch (err) {
+    if (PAGE_REPLACED.test(err?.message || "")) {
+      throw new CaptureCanceled("The page reloaded during capture.");
+    }
+    throw err;
+  }
 }
 
 /* --------------------------- the capture loop --------------------------- */
@@ -1167,8 +1187,16 @@ async function captureFullPage(tab, options = {}) {
       count: `${result.frames.length} section${result.frames.length === 1 ? "" : "s"}`,
     });
 
+    if (result.stitched) {
+      // The finished image replaces the frames; they are not needed again.
+      await FpsImages.remove(session.frameKeys);
+      session.frameKeys = [];
+    } else {
+      // The editor stitches from them instead, and deletes them when done.
+      session.handedOff = true;
+    }
     await saveCapture(tab, {
-      frames: result.frames,
+      frames: result.stitched ? [] : result.frames,
       prestitched: result.stitched || undefined,
       metrics: {
         // Kept for the viewer's older stitching path and for file naming.
@@ -1205,6 +1233,11 @@ async function captureFullPage(tab, options = {}) {
     );
     await updateCaptureProgress(tabId, { remove: true });
     await clearCaptureBadge(tabId);
+    if (!session.handedOff) {
+      await FpsImages.remove(session.frameKeys).catch((err) =>
+        console.warn("Unable to delete capture frames:", err)
+      );
+    }
     endSession(tabId);
   }
 }
@@ -1444,8 +1477,14 @@ async function runCaptureLoop(tab, session, target) {
       destTop = Math.max(0, destTop);
       lastDestTop = destTop;
 
+      // Into the image store at once: the run keeps a key per frame, not every
+      // screenshot it has taken. A long capture used to hold all of them in
+      // the worker's memory until it finished.
+      const key = await storeFrame(dataUrl, `frame:${session.runId}:${index}`);
+      session.frameKeys.push(key);
+      dataUrl = null;
       const frame = {
-        dataUrl,
+        key,
         scrollTop: measured.scrollTop,
         source: measured.source,
         dest: { ...measured.dest, top: destTop },
@@ -1611,7 +1650,7 @@ async function saveCapture(tab, capture) {
   const pageUrl = tab.url;
   const pageTitle = tab.title;
 
-  if (capture.prestitched?.dataUrl) {
+  if (capture.prestitched?.blob) {
     const { prestitched, ...metadata } = capture;
     const baseName = buildCaptureBaseName({ pageUrl, pageTitle, mode: capture.mode, capturedAt });
     const { history = [], historyLimit = 20 } = await chrome.storage.local.get([
@@ -1619,11 +1658,25 @@ async function saveCapture(tab, capture) {
       "historyLimit",
     ]);
     const limit = Math.min(50, Math.max(1, Number(historyLimit) || 20));
-    const imageKey = `captureImage:${capturedAt}:${tab.id}`;
+    const id = FpsImages.newId();
+    const imageKey = `img:${id}`;
+    const thumbKey = `thumb:${id}`;
+    await FpsImages.put(imageKey, prestitched.blob);
+    try {
+      await FpsImages.put(thumbKey, await FpsImages.makeThumbnail(prestitched.blob));
+    } catch (err) {
+      // The history page makes one itself if this is missing.
+      console.warn("Unable to make a history thumbnail:", err);
+    }
     history.unshift({
+      id,
       baseName,
       height: prestitched.height,
       imageKey,
+      // Unannotated so far, so the base and the shown image are one and the
+      // same until the editor saves an annotated version.
+      baseKey: imageKey,
+      thumbKey,
       mode: capture.mode || "fullPage",
       savedAt: capturedAt,
       title: pageTitle || "Screenshot",
@@ -1631,11 +1684,8 @@ async function saveCapture(tab, capture) {
       width: prestitched.width,
     });
     const keptHistory = history.slice(0, limit);
-    const staleImageKeys = history.slice(limit).map((entry) => entry.imageKey).filter(Boolean);
-    // Store each prepared image under its own key. The editor can fetch one
-    // PNG directly instead of deserializing every image in the history list.
+    const staleImageKeys = history.slice(limit).flatMap(FpsImages.entryKeys);
     await chrome.storage.local.set({
-      [imageKey]: prestitched.dataUrl,
       history: keptHistory,
       historyLimit: limit,
       capture: {
@@ -1644,7 +1694,9 @@ async function saveCapture(tab, capture) {
         baseName,
         capturedAt,
         historySaved: true,
+        historyId: id,
         imageKey,
+        baseKey: imageKey,
         pageUrl,
         pageTitle,
         prestitched: true,
@@ -1658,7 +1710,7 @@ async function saveCapture(tab, capture) {
         },
       },
     });
-    if (staleImageKeys.length) await chrome.storage.local.remove(staleImageKeys);
+    await FpsImages.remove(staleImageKeys);
   } else {
     // Fallback for a worker/canvas failure and for single-viewport modes.
     await chrome.storage.local.set({

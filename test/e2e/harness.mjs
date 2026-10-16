@@ -63,6 +63,9 @@ export async function launch({ deviceScaleFactor = 1, viewport = { width: 1280, 
   });
   let [worker] = context.serviceWorkers();
   if (!worker) worker = await context.waitForEvent("serviceworker");
+  // The worker migrates and sweeps the image store as it starts; a test
+  // seeding storage must not race that.
+  await worker.evaluate(() => imageStoreUpkeep);
   await worker.evaluate(installRecorder);
   return {
     context,
@@ -84,16 +87,20 @@ function installRecorder() {
   const original = saveCapture;
   // eslint-disable-next-line no-global-assign
   saveCapture = async (tab, capture) => {
+    // The finished image, held here because the editor deletes handed-over
+    // frames once it has loaded them. Single-viewport modes hand over one raw
+    // frame instead of a stitch.
+    globalThis.__e2eImage =
+      capture.prestitched?.blob ||
+      (capture.frames?.length === 1 ? await FpsImages.get(capture.frames[0].key) : null);
     globalThis.__e2eLast = {
       mode: capture.mode,
       frames: capture.frames?.length || 0,
       truncated: capture.truncated || null,
       diagnostics: capture.diagnostics || null,
-      // Single-viewport modes hand over one raw frame instead of a stitch.
-      frameDataUrl: capture.frames?.length === 1 ? capture.frames[0].dataUrl : null,
+      hasImage: !!globalThis.__e2eImage,
       prestitched: capture.prestitched
         ? {
-            dataUrl: capture.prestitched.dataUrl,
             width: capture.prestitched.width,
             height: capture.prestitched.height,
             downscaled: capture.prestitched.downscaled,
@@ -112,7 +119,11 @@ function installRecorder() {
  * extension asks which pane to capture. Without it, a picker would wait for a
  * click forever.
  */
-export async function capture(harness, page, { mode = "fullPage", options = {}, diagnostics = false, pick } = {}) {
+export async function capture(
+  harness,
+  page,
+  { mode = "fullPage", options = {}, diagnostics = false, pick, keepEditor = false } = {}
+) {
   await page.bringToFront();
   const url = page.url();
   const running = harness.worker.evaluate(
@@ -144,17 +155,34 @@ export async function capture(harness, page, { mode = "fullPage", options = {}, 
 
   const result = await running;
   // The editor opens in a new tab; close it so the next capture starts from
-  // the page under test.
-  for (const other of harness.context.pages()) {
-    if (other !== page && other.url().startsWith("chrome-extension://")) await other.close();
+  // the page under test - unless the test is about the editor.
+  if (!keepEditor) {
+    for (const other of harness.context.pages()) {
+      if (other !== page && other.url().startsWith("chrome-extension://")) await other.close();
+    }
   }
   return result;
 }
 
-// Runs inside the service worker: decode the stitched PNG and return the row
-// code under every image row, run-length encoded.
-async function decodeRowsInWorker(dataUrl) {
-  const blob = await (await fetch(dataUrl)).blob();
+// chrome-extension://<id>/<path> for the loaded test build.
+export function extensionUrl(harness, path) {
+  return new URL(path, harness.worker.url()).href;
+}
+
+// The editor tab a capture opened, once it has finished loading the image.
+export async function waitForEditor(harness) {
+  const editor =
+    harness.context.pages().find((p) => p.url().includes("/viewer.html")) ||
+    (await harness.context.waitForEvent("page", { predicate: (p) => p.url().includes("/viewer.html") }));
+  await editor.waitForSelector("#canvasShell:not([hidden])", { timeout: 30000 });
+  return editor;
+}
+
+// Runs inside the service worker: decode the last capture's image and return
+// the row code under every image row, run-length encoded.
+async function decodeRowsInWorker() {
+  const blob = globalThis.__e2eImage;
+  if (!blob) return { width: 0, height: 0, runs: [] };
   const bitmap = await createImageBitmap(blob);
   const { width, height } = bitmap;
   const canvas = new OffscreenCanvas(width, height);
@@ -235,8 +263,20 @@ export async function setBudget(harness, patch) {
   return () => harness.worker.evaluate((old) => Object.assign(BUDGET, old), previous);
 }
 
-export async function decodeRows(harness, dataUrl) {
-  return harness.worker.evaluate(decodeRowsInWorker, dataUrl);
+export async function decodeRows(harness) {
+  return harness.worker.evaluate(decodeRowsInWorker);
+}
+
+// The last capture's image as base64 PNG, for saving to disk.
+export async function lastImageBase64(harness) {
+  return harness.worker.evaluate(async () => {
+    const blob = globalThis.__e2eImage;
+    if (!blob) return null;
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+    return btoa(binary);
+  });
 }
 
 /**

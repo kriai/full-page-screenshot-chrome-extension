@@ -24,6 +24,7 @@ Two rules for this plan:
 | - | -- | ---- | ------- |
 | 1 | End-to-end tests and a real-site benchmark | M | A |
 | 1b | Fix the capture bugs the benchmark found | M | A |
+| 1c | Stacked pinned bars and headers that return on scroll-up | M | A |
 | 2 | Image storage in IndexedDB, frames out of memory | M | A |
 | 3 | Clear errors for pages that can't be captured, plus `file://` | S | A |
 | 4a | Very long pages at full resolution: capture, view, export | L | B |
@@ -100,6 +101,27 @@ Fixed on `competitive-parity`, each with a fixture that failed first:
 The stitcher's failure message is now recorded in the diagnostics
 (`stitchError`). npm, Stack Overflow and Unsplash still serve a blank page to
 headless Chromium; they stay in the list for headed runs.
+
+## 1c. Stacked pinned bars and headers that return on scroll-up
+
+Found while checking PR 2: The Verge leaves a 65-98px gap on about two runs
+in three, always at a shortfall repair (frame 24), with the gap exactly equal
+to the distance scrolled back. Diagnosis from the diagnostics:
+
+- The repair scrolls up to recover rows. The Verge's header slides in by the
+  distance scrolled up, so the trim at the top grows by exactly that much and
+  the frame still starts where it did. One repair step never closes it.
+- A bar pinned directly under a header (a section or sub-navigation bar)
+  does not touch the top of the band, so it is classed as a mid-band blocker
+  rather than as part of the header: its rows are covered, not trimmed.
+
+Fixes:
+- Classify pinned elements as a stack: anything whose top meets the bottom of
+  a header occluder extends the header trim (same for footers from below).
+- Repair in up to three steps, doubling the step back each time, until the
+  frame starts inside rows already captured.
+- Fixture: a header that reveals proportionally to scroll-up distance, with a
+  sub-navigation bar pinned below it.
 
 ## 2. Image storage in IndexedDB, frames out of memory
 

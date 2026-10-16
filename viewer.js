@@ -30,7 +30,8 @@ const editor = {
   operations: [],
   pendingPreview: null,
   previewScale: 1,
-  projectBaseDataUrl: "",
+  // The history entry this editor saves into, once there is one.
+  historyId: "",
   pendingStyleEdit: null,
   redrawFrame: 0,
   redoStack: [],
@@ -74,6 +75,22 @@ function loadImage(src) {
     img.onerror = reject;
     img.src = src;
   });
+}
+
+// A frame arrives as a Blob, as a key into the image store, or - from a
+// capture saved by an older version - as a data URL.
+async function loadFrameImage(frame) {
+  const blob = frame.blob || (frame.key ? await FpsImages.get(frame.key) : null);
+  if (!blob) {
+    if (frame.dataUrl) return loadImage(frame.dataUrl);
+    throw new Error("A captured frame is missing from storage.");
+  }
+  const url = URL.createObjectURL(blob);
+  try {
+    return await loadImage(url);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 function canvasToBlob(canvas, type, quality) {
@@ -609,13 +626,12 @@ function cloneLayout(layout = editor.layout) {
   return JSON.parse(JSON.stringify(layout));
 }
 
+// Annotations and layout only. The unannotated image lives in the image store
+// under the entry's `baseKey`; projects used to carry it inline as a data URL,
+// so every edit rewrote the whole screenshot into history.
 function cloneProject() {
-  if (!editor.projectBaseDataUrl && editor.baseCanvas) {
-    editor.projectBaseDataUrl = editor.baseCanvas.toDataURL("image/png");
-  }
   return {
-    version: 1,
-    baseDataUrl: editor.projectBaseDataUrl,
+    version: 2,
     baseWidth: editor.baseCanvas.width,
     baseHeight: editor.baseCanvas.height,
     operations: editor.operations.map(cloneOperation),
@@ -1657,7 +1673,6 @@ function setupZoomControls() {
 function loadProjectState(project) {
   if (!project) return;
 
-  if (project.baseDataUrl) editor.projectBaseDataUrl = project.baseDataUrl;
   if (project.layout) {
     editor.layout = {
       ...editor.layout,
@@ -1814,7 +1829,7 @@ async function refreshExports(baseName, options = {}) {
   editor.exportBaseName = baseName;
   if (!options.quiet) showExportStatus("Updated", "done");
   if (!options.skipHistory) {
-    await saveRenderedProjectToHistory(outputCanvas);
+    await saveRenderedProjectToHistory(outputCanvas, pngBlob);
   }
 }
 
@@ -2318,7 +2333,7 @@ async function setupCopyButton() {
       await navigator.clipboard.write([
         new ClipboardItem({ [pngBlob.type]: pngBlob }),
       ]);
-      await saveRenderedProjectToHistory(outputCanvas);
+      await saveRenderedProjectToHistory(outputCanvas, pngBlob);
       setButtonLabel(copy, "copy", "Copied");
       pulseFeedback(copy);
     } catch (err) {
@@ -2396,7 +2411,7 @@ async function setupUploadButton() {
         err.uiLabel = "Copy failed";
         throw err;
       }
-      await saveRenderedProjectToHistory(outputCanvas);
+      await saveRenderedProjectToHistory(outputCanvas, pngBlob);
       await saveUploadToHistory(url);
       setButtonLabel(upload, "upload", "URL copied");
       pulseFeedback(upload);
@@ -2426,19 +2441,51 @@ function normalizeHistoryLimit(value) {
   return Math.min(50, Math.max(1, Number(value) || 20));
 }
 
+function hasEdits() {
+  return editor.operations.length > 0 || editor.layout.enabled;
+}
+
+// Write the image a history entry shows - the unannotated base when there is
+// nothing on it, otherwise an annotated render under its own key - and its
+// thumbnail. Returns the entry fields that point at them.
+async function storeShownImage(id, baseKey, outputCanvas, pngBlob) {
+  let imageKey = baseKey;
+  let shown = null;
+  if (hasEdits()) {
+    imageKey = `out:${id}`;
+    shown = pngBlob || (await canvasToBlob(outputCanvas, "image/png"));
+    await FpsImages.put(imageKey, shown);
+  } else {
+    await FpsImages.remove(`out:${id}`);
+  }
+  const thumbKey = `thumb:${id}`;
+  try {
+    shown = shown || (await FpsImages.get(baseKey));
+    if (shown) await FpsImages.put(thumbKey, await FpsImages.makeThumbnail(shown));
+  } catch (err) {
+    console.warn("Unable to update the history thumbnail:", err);
+  }
+  return { imageKey, thumbKey };
+}
+
 async function autoSaveHistory(capture) {
   const { history = [], historyLimit = 20 } = await chrome.storage.local.get([
     "history",
     "historyLimit",
   ]);
   const limit = normalizeHistoryLimit(historyLimit);
-  const outputCanvas =
-    editor.operations.length || editor.layout.enabled ? renderFinalCanvas() : editor.baseCanvas;
-  const dataUrl = outputCanvas.toDataURL("image/png");
-  if (outputCanvas === editor.baseCanvas) editor.projectBaseDataUrl = dataUrl;
+  const id = FpsImages.newId();
+  const baseKey = `img:${id}`;
+  await FpsImages.put(baseKey, await canvasToBlob(editor.baseCanvas, "image/png"));
+  const outputCanvas = hasEdits() ? renderFinalCanvas() : editor.baseCanvas;
+  const { imageKey, thumbKey } = await storeShownImage(id, baseKey, outputCanvas);
+  editor.historyId = id;
   history.unshift({
+    id,
     baseName: editor.baseName,
-    dataUrl,
+    imageKey,
+    baseKey,
+    thumbKey,
     height: outputCanvas.height,
     mode: capture.mode || "fullPage",
     project: cloneProject(),
@@ -2448,20 +2495,28 @@ async function autoSaveHistory(capture) {
     width: outputCanvas.width,
   });
   const keptHistory = history.slice(0, limit);
-  const staleImageKeys = history.slice(limit).map((entry) => entry.imageKey).filter(Boolean);
+  const staleImageKeys = history.slice(limit).flatMap(FpsImages.entryKeys);
   await chrome.storage.local.set({
     history: keptHistory,
     historyLimit: limit,
   });
-  if (staleImageKeys.length) await chrome.storage.local.remove(staleImageKeys);
+  await FpsImages.remove(staleImageKeys);
   editor.historyReady = true;
+}
+
+function findHistoryIndex(history) {
+  if (editor.historyId) {
+    const byId = history.findIndex((entry) => entry.id === editor.historyId);
+    if (byId >= 0) return byId;
+  }
+  return history.findIndex((entry) => entry.baseName === editor.baseName);
 }
 
 async function saveProjectToHistory() {
   if (!editor.historyReady || !editor.baseName || !editor.baseCanvas) return;
 
   const { history = [] } = await chrome.storage.local.get("history");
-  const index = history.findIndex((entry) => entry.baseName === editor.baseName);
+  const index = findHistoryIndex(history);
   if (index < 0) return;
 
   const project = cloneProject();
@@ -2473,28 +2528,36 @@ async function saveProjectToHistory() {
   await chrome.storage.local.set({ history });
 }
 
-async function saveRenderedProjectToHistory(outputCanvas) {
+// `pngBlob`, when the caller already encoded the output, saves encoding a
+// large image twice.
+async function saveRenderedProjectToHistory(outputCanvas, pngBlob) {
   if (!editor.historyReady || !editor.baseName || !editor.baseCanvas || !outputCanvas) return;
 
   const { history = [] } = await chrome.storage.local.get("history");
-  const index = history.findIndex((entry) => entry.baseName === editor.baseName);
+  const index = findHistoryIndex(history);
   if (index < 0) return;
 
-  const dataUrl = outputCanvas.toDataURL("image/png");
-  const project = cloneProject();
-  const updatedEntry = {
-    ...history[index],
+  const entry = history[index];
+  const id = entry.id || editor.historyId || FpsImages.newId();
+  const baseKey = entry.baseKey || entry.imageKey;
+  const shown = await storeShownImage(id, baseKey, outputCanvas, pngBlob);
+  // An entry whose thumbnail key changed leaves the old one behind otherwise.
+  if (entry.thumbKey && entry.thumbKey !== shown.thumbKey) await FpsImages.remove(entry.thumbKey);
+
+  const { history: latest = [] } = await chrome.storage.local.get("history");
+  const at = latest.findIndex((item) => item.id === entry.id && item.baseName === entry.baseName);
+  if (at < 0) return;
+  latest[at] = {
+    ...latest[at],
+    id,
+    baseKey,
+    ...shown,
     height: outputCanvas.height,
-    project,
+    project: cloneProject(),
     updatedAt: Date.now(),
     width: outputCanvas.width,
   };
-  if (history[index].imageKey) delete updatedEntry.dataUrl;
-  else updatedEntry.dataUrl = dataUrl;
-  history[index] = updatedEntry;
-  const update = { history };
-  if (history[index].imageKey) update[history[index].imageKey] = dataUrl;
-  await chrome.storage.local.set(update);
+  await chrome.storage.local.set({ history: latest });
 }
 
 function scheduleProjectHistorySave() {
@@ -2512,7 +2575,7 @@ async function saveUploadToHistory(url) {
   const { history = [] } = await chrome.storage.local.get("history");
   const uploadedAt = Date.now();
   const uploadExpiresAt = uploadedAt + 3 * 60 * 60 * 1000;
-  const index = history.findIndex((entry) => entry.baseName === editor.baseName);
+  const index = findHistoryIndex(history);
   if (index < 0) return;
 
   history[index] = {
@@ -2558,41 +2621,38 @@ async function main() {
     return;
   }
 
+  // History from an older version may not have been moved yet if the worker
+  // has not run since the update; the base image has to be found either way.
+  await FpsImages.migrateLegacyHistory().catch((err) => console.warn("History migration failed:", err));
+  // Frames handed over for viewer-side stitching, deleted once the editor has
+  // its own copy of the image.
+  const handedFrames = (capture.frames || []).map((frame) => frame.key).filter(Boolean);
+
   if (capture.prestitched && !capture.frames?.length) {
-    const storedImage = capture.imageKey
-      ? await chrome.storage.local.get(capture.imageKey)
-      : {};
-    let dataUrl = capture.imageKey ? storedImage[capture.imageKey] : "";
-    let entry = null;
-    if (!dataUrl) {
-      const { history = [] } = await chrome.storage.local.get("history");
-      entry = history.find((item) => item.baseName === capture.baseName);
-      dataUrl = entry?.dataUrl || "";
-    }
-    if (!dataUrl) throw new Error("The prepared screenshot could not be found in history.");
+    const blob = await FpsImages.get(capture.baseKey || capture.imageKey);
+    if (!blob) throw new Error("The prepared screenshot could not be found in history.");
     capture = {
       ...capture,
-      frames: [{ x: 0, y: 0, dataUrl }],
+      frames: [{ x: 0, y: 0, blob }],
       metrics: {
         ...capture.metrics,
-        viewportWidth: entry?.width || capture.prestitchedReport?.width || capture.metrics.viewportWidth,
-        viewportHeight: entry?.height || capture.prestitchedReport?.height || capture.metrics.viewportHeight,
+        viewportWidth: capture.prestitchedReport?.width || capture.metrics.viewportWidth,
+        viewportHeight: capture.prestitchedReport?.height || capture.metrics.viewportHeight,
         dpr: 1,
       },
     };
   }
+  if (capture.historyId) editor.historyId = capture.historyId;
 
   const { frames, pageTitle } = capture;
   document.getElementById("title").textContent = pageTitle || "Screenshot";
   document.title = `Screenshot - ${pageTitle || ""}`;
 
   status.textContent = "Loading captured frames";
-  const images = await Promise.all(frames.map((f) => loadImage(f.dataUrl)));
+  const images = await Promise.all(frames.map(loadFrameImage));
   status.textContent = "Stitching screenshot";
   const stitchReport = {};
   editor.baseCanvas = drawCapture(capture, images, stitchReport);
-  editor.projectBaseDataUrl =
-    capture.project?.baseDataUrl || (capture.prestitched ? frames[0].dataUrl : "");
   editor.baseDisplayCanvas = document.getElementById("baseDisplayCanvas");
   editor.baseDisplayCtx = editor.baseDisplayCanvas.getContext("2d");
   editor.canvas = document.getElementById("editorCanvas");
@@ -2637,8 +2697,9 @@ async function main() {
     status.hidden = true;
   }
 
-  // The frames are large; drop them now that the image is rendered.
+  // The frames are large; drop them now that the image is rendered and saved.
   await chrome.storage.local.remove("capture");
+  await FpsImages.remove(handedFrames);
 }
 
 main().catch((err) => {

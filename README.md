@@ -59,6 +59,14 @@ export controls.
   fails, the raw-frame viewer path remains as a fallback.
 - `viewer.js` loads the prepared image onto an editable canvas, applies
   annotations, then prepares clipboard, PNG, JPEG, and PDF outputs.
+- `image-store.js` keeps every image - capture frames, finished screenshots,
+  annotated renders and history thumbnails - as Blobs in IndexedDB, shared by
+  the worker, the editor and the history page. `chrome.storage.local` holds
+  only metadata that points at them, so saving an annotation edit writes a few
+  hundred bytes rather than the screenshot again. Frames go into the store the
+  moment they are taken, so a long capture never holds them all in memory.
+  History saved by older versions is moved across on first start, and images
+  nothing refers to any more (a run stopped mid-capture) are swept away.
 
 ### Full-page capture details
 
