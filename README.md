@@ -227,7 +227,9 @@ and attaches them to the capture handed to the viewer.
 
 ## Known limitations
 
-- Can't capture `chrome://` pages, the Chrome Web Store, or PDFs.
+- Can't capture Chrome's own pages, other extensions' pages, the Chrome Web
+  Store or Chrome's PDF viewer; the popup says which and why. Local `file://`
+  pages work once "Allow access to file URLs" is turned on for the extension.
 - Only one vertical scroll target per capture: independently scrolling panes are
   not combined into a single image, and horizontal tiling is not supported.
 - Virtualized lists are captured viewport by viewport; if the list recycles rows

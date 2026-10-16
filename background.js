@@ -1,6 +1,6 @@
 // Shared geometry helpers (also used by the viewer and the node tests), and
 // the IndexedDB image store shared with the editor and the history page.
-importScripts("capture-geometry.js", "image-store.js");
+importScripts("capture-geometry.js", "image-store.js", "page-access.js");
 
 // Every time the worker starts: move history saved by older versions into the
 // image store, then drop images nothing refers to any more (frames of a run
@@ -83,11 +83,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   (async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id || !tab.url || !/^https?:/.test(tab.url)) {
-      sendResponse({
-        ok: false,
-        error: "Open a normal http or https page first.",
-      });
+    const access = await checkPageAccess(tab);
+    if (!access.ok) {
+      sendResponse({ ok: false, error: access.message });
       return;
     }
 
@@ -105,11 +103,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         console.info("Screenshot capture canceled:", err.message);
       } else {
         console.error("Screenshot capture failed:", err);
-        setTemporaryErrorBadge(tab.id, err?.message);
+        setTemporaryErrorBadge(tab.id, FpsPageAccess.explainError(err));
       }
       postToCapturePopup({
         type: "captureError",
-        error: err?.message || "Capture failed.",
+        error: err?.canceled ? err.message : FpsPageAccess.explainError(err),
       });
       if (!err?.concurrent) await cleanupCaptureTab(tab.id);
     }
@@ -122,6 +120,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Whether the tab holds something an extension may capture, with a message
+// to show when it does not. File pages depend on a per-extension setting.
+async function checkPageAccess(tab) {
+  if (!tab?.id) return { ok: false, message: "There's no tab to capture." };
+  const fileAccess = tab.url?.startsWith("file:")
+    ? await chrome.extension.isAllowedFileSchemeAccess().catch(() => false)
+    : false;
+  return FpsPageAccess.classifyUrl(tab.url, { fileAccess });
+}
 
 function setTemporaryErrorBadge(tabId, message) {
   updateCaptureBadge(tabId, {
