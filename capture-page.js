@@ -1048,7 +1048,10 @@
     for (const box of stackCandidates) {
       const wide = Math.min(box.right, bandRight) - Math.max(box.left, bandLeft) >= (bandRight - bandLeft) * 0.5;
       if (wide && box.top <= bandTop + Math.max(trimTop, bandHeight * 0.35)) {
-        trimTop = Math.max(trimTop, box.bottom - bandTop);
+        // On the first frame the furniture at the top is still in its natural
+        // place - a header under a banner, say - and is shown once, like any
+        // header; trimming it would cut everything above it from the image.
+        if (!isFirst) trimTop = Math.max(trimTop, box.bottom - bandTop);
       } else if (wide && box.bottom >= bandBottom - Math.max(trimBottom, bandHeight * 0.35)) {
         trimBottom = Math.max(trimBottom, bandBottom - box.top);
       } else {
