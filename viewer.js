@@ -627,61 +627,115 @@ function textFromEditor(element) {
   return element.innerText.replace(/\n+$/g, "").trim();
 }
 
+const CHECK_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg>';
+const CLOSE_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>';
+
+// Typing a label: a small input floats 12px above the text (below it near the
+// top edge, always inside the canvas area) at a fixed screen size, while the
+// label itself shows on the canvas in its final colour and size.
 function openTextEditor(point, baseName) {
   if (editor.activeTextInput) editor.activeTextInput.finish(true);
 
-  const shell = document.getElementById("canvasShell");
-  const canvasRect = editor.canvas.getBoundingClientRect();
-  const shellRect = shell.getBoundingClientRect();
-  const scaleX = canvasRect.width / editor.baseCanvas.width;
-  const scaleY = canvasRect.height / editor.baseCanvas.height;
+  const area = document.querySelector(".canvas-area");
+  const stage = document.getElementById("stage");
   const wrap = document.createElement("div");
+  wrap.className = "text-input";
+  const dot = document.createElement("span");
+  dot.className = "text-dot";
   const input = document.createElement("div");
-  const actions = document.createElement("div");
-  const cancel = document.createElement("button");
+  input.className = "text-field";
+  input.contentEditable = "true";
+  input.dataset.placeholder = "Type a label";
+  input.setAttribute("role", "textbox");
+  input.setAttribute("aria-label", "Label text");
   const done = document.createElement("button");
+  done.type = "button";
+  done.className = "text-done";
+  done.title = "Done (Enter)";
+  done.setAttribute("aria-label", "Done");
+  done.innerHTML = CHECK_ICON;
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "text-cancel";
+  cancel.title = "Cancel (Esc)";
+  cancel.setAttribute("aria-label", "Cancel");
+  cancel.innerHTML = CLOSE_ICON;
+  wrap.append(dot, input, done, cancel);
+  area.appendChild(wrap);
+
+  // The first few times only.
+  let hint = null;
+  if ((editor.textHintUses || 0) < 3) {
+    hint = document.createElement("div");
+    hint.className = "text-hint";
+    hint.textContent = "Enter to finish · Esc to cancel";
+    area.appendChild(hint);
+    editor.textHintUses = (editor.textHintUses || 0) + 1;
+    chrome.storage.local.set({ textHintUses: editor.textHintUses }).catch(() => {});
+  }
+
+  editor.textDraft = { type: "text", point, text: "", ...currentStyle("text"), background: !!editor.style.textBackground };
   let finished = false;
 
-  wrap.className = "text-editor-wrap";
-  wrap.style.left = `${canvasRect.left - shellRect.left + point.x * scaleX}px`;
-  wrap.style.top = `${canvasRect.top - shellRect.top + point.y * scaleY}px`;
-  input.className = "text-editor";
-  input.contentEditable = "true";
-  input.dataset.placeholder = "Type text";
-  actions.className = "text-editor-actions";
-  cancel.type = "button";
-  cancel.textContent = "Cancel";
-  done.type = "button";
-  done.className = "primary";
-  done.textContent = "Done";
-  actions.append(cancel, done);
-  wrap.append(input, actions);
-  shell.appendChild(wrap);
+  function place() {
+    const m = clientMapper();
+    const box = area.getBoundingClientRect();
+    const draft = editor.textDraft;
+    const bounds = draft.text
+      ? textBounds(draft)
+      : { x: point.x, y: point.y, width: 0, height: draft.textSize * 1.22 };
+    const textTop = m.y(bounds.y);
+    const textBottom = m.y(bounds.y + bounds.height);
+    const height = wrap.offsetHeight;
+    const width = wrap.offsetWidth;
+    let top = textTop - 12 - height;
+    const above = top >= box.top + 8;
+    if (!above) top = textBottom + 12;
+    top = Math.min(Math.max(top, box.top + 8), box.bottom - height - 8);
+    const left = Math.min(Math.max(m.x(bounds.x), box.left + 8), box.right - width - 8);
+    wrap.style.left = `${left - box.left}px`;
+    wrap.style.top = `${top - box.top}px`;
+    if (hint) {
+      const hintTop = above ? textBottom + 8 : top + height + 4;
+      hint.style.left = `${left - box.left}px`;
+      hint.style.top = `${Math.min(hintTop, box.bottom - 24) - box.top}px`;
+    }
+  }
 
   function syncStyle() {
     const style = currentStyle("text");
-    input.style.color = style.color;
-    input.style.fontSize = `${Math.max(13, style.textSize * scaleY)}px`;
-    input.style.textShadow = "0 1px 2px rgba(0, 0, 0, 0.85)";
+    Object.assign(editor.textDraft, style, { background: !!editor.style.textBackground });
+    dot.style.background = style.color;
+    requestRedraw();
+    place();
   }
 
   function finish(commit) {
     if (finished) return;
     finished = true;
     const text = textFromEditor(input);
+    const draft = editor.textDraft;
     wrap.remove();
+    hint?.remove();
+    stage.removeEventListener("scroll", place);
+    window.removeEventListener("resize", place);
     editor.activeTextInput = null;
+    editor.textDraft = null;
 
     if (commit && text) {
-      pushOperation(
-        { type: "text", point, text, ...currentStyle("text"), background: !!editor.style.textBackground },
-        baseName
-      );
+      pushOperation({ ...draft, text, point }, baseName);
+    } else {
+      redraw();
     }
   }
 
   editor.activeTextInput = { finish, syncStyle };
 
+  input.addEventListener("input", () => {
+    editor.textDraft.text = textFromEditor(input);
+    requestRedraw();
+    place();
+  });
   input.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -692,10 +746,17 @@ function openTextEditor(point, baseName) {
       finish(true);
     }
   });
+  // Keep the focus in the field when a button is pressed.
+  for (const button of [done, cancel]) button.addEventListener("pointerdown", (event) => event.preventDefault());
   cancel.addEventListener("click", () => finish(false));
   done.addEventListener("click", () => finish(true));
+  stage.addEventListener("scroll", place, { passive: true });
+  window.addEventListener("resize", place);
   syncStyle();
-  requestAnimationFrame(() => input.focus());
+  requestAnimationFrame(() => {
+    place();
+    input.focus();
+  });
 }
 
 function cloneOperation(operation) {
@@ -1211,7 +1272,7 @@ function operationBounds(operation) {
   }
   if (operation.type === "text") return textBounds(operation);
   if (operation.type === "step") {
-    const radius = operation.radius || Math.max(36, operation.textSize * 1.24);
+    const radius = stepRadius(operation) + stepRing(operation);
     return {
       x: operation.point.x - radius,
       y: operation.point.y - radius,
@@ -1232,27 +1293,129 @@ function containsPoint(rect, point, padding = 0) {
   );
 }
 
-function selectionHandles(operation) {
-  if (operation.type === "arrow") {
-    return [
-      { name: "from", x: operation.from.x, y: operation.from.y },
-      { name: "to", x: operation.to.x, y: operation.to.y },
-    ];
-  }
-  const bounds = operationBounds(operation);
-  return [
-    { name: "nw", x: bounds.x, y: bounds.y },
-    { name: "ne", x: bounds.x + bounds.width, y: bounds.y },
-    { name: "se", x: bounds.x + bounds.width, y: bounds.y + bounds.height },
-    { name: "sw", x: bounds.x, y: bounds.y + bounds.height },
-  ];
+/* -------------------- on-screen tool UI (screen space) ------------------- */
+
+// Selection outlines, handles, chips and the crop frame are drawn on an
+// overlay over the canvas area at a fixed on-screen size, whatever the zoom.
+// Annotations themselves stay on the editor canvas and scale with the image.
+
+const OUTLINE_GAP = 3; // px between a shape and its selection outline
+const HANDLE_HIT = 10; // half of the 20px hit area around every handle
+
+// Image coordinates to and from viewport (client) coordinates.
+function clientMapper() {
+  const rect = editor.canvas.getBoundingClientRect();
+  const scale = rect.width / editor.baseCanvas.width || 1;
+  return {
+    scale,
+    rect,
+    x: (x) => rect.left + x * scale,
+    y: (y) => rect.top + y * scale,
+  };
 }
 
-function handleAtPoint(operation, point) {
-  const scale = editor.baseCanvas.width / editor.canvas.getBoundingClientRect().width;
-  const radius = Math.max(8, 6 * scale);
-  return selectionHandles(operation).find(
-    (handle) => Math.hypot(handle.x - point.x, handle.y - point.y) <= radius
+// Base-image pixels per CSS pixel at the current zoom.
+function cssPixel() {
+  const width = editor.canvas.getBoundingClientRect().width || editor.baseCanvas.width;
+  return editor.baseCanvas.width / width;
+}
+
+function stepRing(operation) {
+  return Math.max(2, stepRadius(operation) * 0.1);
+}
+
+function stepRadius(operation) {
+  return operation.radius || Math.max(36, operation.textSize * 1.24);
+}
+
+// The area a shape visibly covers, for its outline.
+function visualBounds(operation) {
+  if (operation.type === "rect") {
+    const half = operation.strokeWidth / 2;
+    const { x, y, width, height } = operation.rect;
+    return { x: x - half, y: y - half, width: width + half * 2, height: height + half * 2 };
+  }
+  if (operation.type === "pen") {
+    const xs = operation.points.map((point) => point.x);
+    const ys = operation.points.map((point) => point.y);
+    const half = operation.strokeWidth / 2;
+    return {
+      x: Math.min(...xs) - half,
+      y: Math.min(...ys) - half,
+      width: Math.max(...xs) - Math.min(...xs) + half * 2,
+      height: Math.max(...ys) - Math.min(...ys) + half * 2,
+    };
+  }
+  return operationBounds(operation);
+}
+
+// What a selected annotation shows, in client coordinates: an outline box,
+// a ring (steps), and its handles. Boxes and hidden areas get eight handles;
+// pen strokes and text four; arrows only their two ends; a step one round
+// handle beside its ring, flipped to the top-left near the screen's edge.
+function selectionGeometry(operation) {
+  const m = clientMapper();
+  if (operation.type === "arrow") {
+    return {
+      handles: [
+        { name: "from", x: m.x(operation.from.x), y: m.y(operation.from.y), round: true },
+        { name: "to", x: m.x(operation.to.x), y: m.y(operation.to.y), round: true },
+      ],
+    };
+  }
+  if (operation.type === "step") {
+    const cx = m.x(operation.point.x);
+    const cy = m.y(operation.point.y);
+    const ring = (stepRadius(operation) + stepRing(operation)) * m.scale + 2;
+    const reach = (ring + 7) * Math.SQRT1_2;
+    const area = document.querySelector(".canvas-area").getBoundingClientRect();
+    const flip = cx + reach + HANDLE_HIT > area.right || cy + reach + HANDLE_HIT > area.bottom;
+    return {
+      ring: { cx, cy, r: ring + 0.5 },
+      handles: [
+        flip
+          ? { name: "step-nw", x: cx - reach, y: cy - reach, round: true }
+          : { name: "step-se", x: cx + reach, y: cy + reach, round: true },
+      ],
+    };
+  }
+  const b = visualBounds(operation);
+  // Whole pixels, so the 1px line and its halo stay crisp.
+  const x0 = Math.floor(m.x(b.x) - OUTLINE_GAP);
+  const y0 = Math.floor(m.y(b.y) - OUTLINE_GAP);
+  const box = {
+    x: x0,
+    y: y0,
+    width: Math.ceil(m.x(b.x + b.width) + OUTLINE_GAP) - x0,
+    height: Math.ceil(m.y(b.y + b.height) + OUTLINE_GAP) - y0,
+  };
+  const left = box.x;
+  const right = box.x + box.width;
+  const top = box.y;
+  const bottom = box.y + box.height;
+  const midX = left + box.width / 2;
+  const midY = top + box.height / 2;
+  const handles = [
+    { name: "nw", x: left, y: top },
+    { name: "ne", x: right, y: top },
+    { name: "se", x: right, y: bottom },
+    { name: "sw", x: left, y: bottom },
+  ];
+  if (operation.type === "rect" || HIDE_TYPES.includes(operation.type)) {
+    handles.push(
+      { name: "n", x: midX, y: top },
+      { name: "e", x: right, y: midY },
+      { name: "s", x: midX, y: bottom },
+      { name: "w", x: left, y: midY }
+    );
+  }
+  return { box, handles };
+}
+
+// The handle of `operation` under the pointer, by its 20 × 20px hit area.
+function handleAtClient(operation, clientX, clientY) {
+  return selectionGeometry(operation).handles.find(
+    (handle) => Math.abs(handle.x - clientX) <= HANDLE_HIT && Math.abs(handle.y - clientY) <= HANDLE_HIT
   );
 }
 
@@ -1263,43 +1426,149 @@ function operationAtPoint(point) {
   return -1;
 }
 
-function drawSelection(ctx) {
-  const operation = editor.operations[editor.selectedIndex];
-  if (!operation) return;
-
-  const bounds = operationBounds(operation);
-  const px = cssPixel();
+// 1px dark line with a 2px white halo outside it: visible on any page.
+function strokeOutline(ctx, box) {
   ctx.save();
-  // Dark dashes over a white line read on light and dark screenshots alike.
-  ctx.lineWidth = px;
   ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
-  ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  ctx.lineWidth = 2;
+  ctx.strokeRect(box.x - 1, box.y - 1, box.width + 2, box.height + 2);
   ctx.strokeStyle = "#111111";
-  ctx.setLineDash([6 * px, 4 * px]);
-  ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
-  ctx.setLineDash([]);
-  for (const handle of selectionHandles(operation)) drawHandle(ctx, handle.x, handle.y);
+  ctx.lineWidth = 1;
+  ctx.strokeRect(box.x + 0.5, box.y + 0.5, box.width - 1, box.height - 1);
   ctx.restore();
 }
 
-// Base-image pixels per CSS pixel at the current zoom, for drawing editor
-// chrome at a constant on-screen size.
-function cssPixel() {
-  const width = editor.canvas.getBoundingClientRect().width || editor.baseCanvas.width;
-  return editor.baseCanvas.width / width;
-}
-
-// A 10px white square with a 2px dark border.
-function drawHandle(ctx, x, y) {
-  const px = cssPixel();
-  const size = 10 * px;
+function drawOverlayHandle(ctx, handle) {
   ctx.save();
-  ctx.setLineDash([]);
   ctx.fillStyle = "#ffffff";
   ctx.strokeStyle = "#111111";
-  ctx.lineWidth = 2 * px;
-  ctx.fillRect(x - size / 2, y - size / 2, size, size);
-  ctx.strokeRect(x - size / 2, y - size / 2, size, size);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  if (handle.round) {
+    ctx.arc(handle.x, handle.y, 4.5, 0, Math.PI * 2);
+  } else {
+    roundRectPath(ctx, handle.x - 3.5, handle.y - 3.5, 7, 7, 2);
+  }
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+// A small dark label, e.g. "Blur · 8" or the crop size.
+function drawChip(ctx, text, x, y, { mono = false } = {}) {
+  ctx.save();
+  ctx.font = mono ? "11px ui-monospace, 'SF Mono', Menlo, monospace" : "500 11px system-ui, -apple-system, 'Segoe UI', sans-serif";
+  const width = Math.ceil(ctx.measureText(text).width) + 12;
+  ctx.fillStyle = "#1c1c1c";
+  roundRectPath(ctx, x, y, width, 20, 4);
+  ctx.fill();
+  ctx.fillStyle = "#ededed";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, x + 6, y + 10.5);
+  ctx.restore();
+  return width;
+}
+
+function drawSelectionOverlay(ctx, operation, { handles = true } = {}) {
+  const geometry = selectionGeometry(operation);
+  if (geometry.box) strokeOutline(ctx, geometry.box);
+  if (geometry.ring) {
+    const { cx, cy, r } = geometry.ring;
+    ctx.save();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "#111111";
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  if (operation.type === "blur" && geometry.box && handles) {
+    drawChip(ctx, `Blur · ${operation.strokeWidth}`, geometry.box.x + OUTLINE_GAP, geometry.box.y - 8 - 20);
+  }
+  if (handles) geometry.handles.forEach((handle) => drawOverlayHandle(ctx, handle));
+}
+
+// The pending crop: outside dimmed, a white frame with corner brackets and
+// edge bars, and its size in image pixels above it.
+function drawCropOverlayScreen(ctx, m) {
+  const rect = editor.cropDraft;
+  if (!rect) return;
+  const image = { x: m.x(0), y: m.y(0), width: editor.baseCanvas.width * m.scale, height: editor.baseCanvas.height * m.scale };
+  const x = m.x(rect.x);
+  const y = m.y(rect.y);
+  const w = rect.width * m.scale;
+  const h = rect.height * m.scale;
+  ctx.save();
+  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+  ctx.beginPath();
+  ctx.rect(image.x, image.y, image.width, image.height);
+  ctx.rect(x, y, w, h);
+  ctx.fill("evenodd");
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.35)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x - 2, y - 2, w + 4, h + 4);
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x - 0.5, y - 0.5, w + 1, h + 1);
+
+  ctx.fillStyle = "#ffffff";
+  const L = 16;
+  const T = 3;
+  for (const [cx, cy, sx, sy] of [[x, y, 1, 1], [x + w, y, -1, 1], [x + w, y + h, -1, -1], [x, y + h, 1, -1]]) {
+    const ox = sx > 0 ? cx - T : cx - L + T;
+    const oy = sy > 0 ? cy - T : cy - L + T;
+    ctx.fillRect(ox, sy > 0 ? cy - T : cy, L, T);
+    ctx.fillRect(sx > 0 ? cx - T : cx, oy, T, L);
+  }
+  for (const [bx, by, bw, bh] of [[x + w / 2 - 6, y - 2, 12, 4], [x + w / 2 - 6, y + h - 2, 12, 4], [x - 2, y + h / 2 - 6, 4, 12], [x + w - 2, y + h / 2 - 6, 4, 12]]) {
+    roundRectPath(ctx, bx, by, bw, bh, 1);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  const label = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
+  const area = document.querySelector(".canvas-area").getBoundingClientRect();
+  const chipY = y - 8 - 20 >= area.top + 4 ? y - 8 - 20 : y + 8;
+  drawChip(ctx, label, x + (chipY > y ? 8 : 0), chipY, { mono: true });
+}
+
+// Redraws the overlay for the current state. Cheap: it only strokes a few
+// shapes, so it runs on every redraw, scroll and zoom.
+function renderOverlay() {
+  const overlay = document.getElementById("overlayCanvas");
+  if (!overlay || !editor.canvas || !editor.baseCanvas) return;
+  const area = overlay.parentElement.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.round(area.width * dpr);
+  const height = Math.round(area.height * dpr);
+  if (overlay.width !== width || overlay.height !== height) {
+    overlay.width = width;
+    overlay.height = height;
+  }
+  const ctx = overlay.getContext("2d");
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  // Client coordinates, so geometry from getBoundingClientRect draws as is.
+  ctx.setTransform(dpr, 0, 0, dpr, -area.left * dpr, -area.top * dpr);
+  const stage = document.getElementById("stage").getBoundingClientRect();
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(stage.left, stage.top, stage.width, stage.height);
+  ctx.clip();
+
+  const m = clientMapper();
+  if (editor.currentTool === "crop") drawCropOverlayScreen(ctx, m);
+
+  // While something is being moved, resized or drawn its handles hide and
+  // only the outline stays.
+  const busy = !!(editor.interaction || editor.draft);
+  const draft = editor.draft;
+  if (draft && draft.type !== "arrow" && draft.type !== "pen" && operationIsLargeEnough(draft)) {
+    drawSelectionOverlay(ctx, draft, { handles: false });
+  }
+  if (editor.textDraft?.text) drawSelectionOverlay(ctx, editor.textDraft, { handles: false });
+  const selected = editor.operations[editor.selectedIndex];
+  if (selected && editor.currentTool !== "crop") drawSelectionOverlay(ctx, selected, { handles: !busy });
   ctx.restore();
 }
 
@@ -1333,13 +1602,12 @@ function scalePoint(point, fromBounds, toBounds) {
   point.y = toBounds.y + ry * toBounds.height;
 }
 
+// `startBounds` with `handle` (a corner or edge name) moved to `point`.
 function resizeBounds(startBounds, handle, point) {
-  const left = handle === "nw" || handle === "sw" ? point.x : startBounds.x;
-  const right =
-    handle === "ne" || handle === "se" ? point.x : startBounds.x + startBounds.width;
-  const top = handle === "nw" || handle === "ne" ? point.y : startBounds.y;
-  const bottom =
-    handle === "sw" || handle === "se" ? point.y : startBounds.y + startBounds.height;
+  const left = handle.includes("w") ? point.x : startBounds.x;
+  const right = handle.includes("e") ? point.x : startBounds.x + startBounds.width;
+  const top = handle.includes("n") ? point.y : startBounds.y;
+  const bottom = handle.includes("s") ? point.y : startBounds.y + startBounds.height;
   const normalized = normalizeRect({ x: left, y: top }, { x: right, y: bottom });
   return {
     x: normalized.x,
@@ -1349,10 +1617,29 @@ function resizeBounds(startBounds, handle, point) {
   };
 }
 
-function resizeOperation(operation, startOperation, startBounds, handle, point) {
+// Where a handle sits on the shape's own bounds, in image coordinates. A drag
+// moves that point by the pointer's travel, so grabbing a handle that sits a
+// few pixels outside the shape doesn't make it jump.
+function handleAnchor(operation, bounds, handle) {
+  if (handle === "from") return { ...operation.from };
+  if (handle === "to") return { ...operation.to };
+  return {
+    x: handle.includes("w") ? bounds.x : handle.includes("e") ? bounds.x + bounds.width : bounds.x + bounds.width / 2,
+    y: handle.includes("n") ? bounds.y : handle.includes("s") ? bounds.y + bounds.height : bounds.y + bounds.height / 2,
+  };
+}
+
+function resizeOperation(operation, startOperation, startBounds, handle, point, delta) {
   if (operation.type === "arrow") {
     if (handle === "from") operation.from = { ...point };
     if (handle === "to") operation.to = { ...point };
+    return;
+  }
+  if (operation.type === "step") {
+    // The one handle sits on the diagonal; travel along it grows the marker.
+    const along = (delta.x + delta.y) / 2;
+    const start = stepRadius(startOperation);
+    operation.radius = Math.max(18, handle === "step-nw" ? start - along : start + along);
     return;
   }
 
@@ -1377,14 +1664,6 @@ function resizeOperation(operation, startOperation, startBounds, handle, point) 
     operation.textSize = Math.max(8, Math.round(startOperation.textSize * scale));
     const pad = textPadding(operation);
     operation.point = { x: nextBounds.x + pad.x, y: nextBounds.y + pad.y };
-    return;
-  }
-  if (operation.type === "step") {
-    operation.point = {
-      x: nextBounds.x + nextBounds.width / 2,
-      y: nextBounds.y + nextBounds.height / 2,
-    };
-    operation.radius = Math.max(18, Math.min(nextBounds.width, nextBounds.height) / 2);
   }
 }
 
@@ -1402,53 +1681,42 @@ function clearAnnotationShadow(ctx) {
   ctx.shadowOffsetY = 0;
 }
 
+// A shaft ending at the base of a filled triangular head, drawn as one shape
+// so its shadow doesn't double where they meet. The head is at least 14px and
+// four times the stroke width long, and 0.85 times as wide as it is long.
 function drawArrow(ctx, operation) {
   const { from, to, color, strokeWidth } = operation;
-  const angle = Math.atan2(to.y - from.y, to.x - from.x);
   const arrowLength = Math.hypot(to.x - from.x, to.y - from.y);
   if (arrowLength < 1) return;
 
-  const shaftWidth = Math.max(3, strokeWidth);
-  const tailHalf = shaftWidth * 0.42;
-  const neckHalf = shaftWidth * 0.72;
-  const headLength = Math.min(arrowLength * 0.42, Math.max(16, shaftWidth * 3.4));
-  const headWidth = Math.min(arrowLength * 0.5, Math.max(headLength * 0.82, shaftWidth * 2.35));
-  const headHalf = headWidth / 2;
-  const unitX = Math.cos(angle);
-  const unitY = Math.sin(angle);
-  const perpendicularX = -unitY;
-  const perpendicularY = unitX;
-  const base = {
-    x: to.x - unitX * headLength,
-    y: to.y - unitY * headLength,
-  };
-  const shaftEnd = {
-    x: base.x + unitX * Math.min(shaftWidth * 0.18, headLength * 0.18),
-    y: base.y + unitY * Math.min(shaftWidth * 0.18, headLength * 0.18),
-  };
+  const shaftWidth = Math.max(2, strokeWidth);
+  const headLength = Math.min(arrowLength * 0.75, Math.max(14, shaftWidth * 4));
+  const headHalf = (headLength * 0.85) / 2;
+  const unitX = (to.x - from.x) / arrowLength;
+  const unitY = (to.y - from.y) / arrowLength;
+  const perpX = -unitY;
+  const perpY = unitX;
+  const half = shaftWidth / 2;
+  const base = { x: to.x - unitX * headLength, y: to.y - unitY * headLength };
+  // The shaft runs a little into the head so no seam shows at the base.
+  const neck = { x: base.x + unitX * half, y: base.y + unitY * half };
+  const angle = Math.atan2(unitY, unitX);
 
   ctx.save();
   ctx.fillStyle = color;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = Math.min(3.5, Math.max(1.2, shaftWidth * 0.16));
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
   applyAnnotationShadow(ctx, shaftWidth);
-
   ctx.beginPath();
-  ctx.moveTo(from.x + perpendicularX * tailHalf, from.y + perpendicularY * tailHalf);
-  ctx.lineTo(shaftEnd.x + perpendicularX * neckHalf, shaftEnd.y + perpendicularY * neckHalf);
-  ctx.lineTo(base.x + perpendicularX * headHalf, base.y + perpendicularY * headHalf);
-  ctx.lineTo(to.x, to.y);
-  ctx.lineTo(base.x - perpendicularX * headHalf, base.y - perpendicularY * headHalf);
-  ctx.lineTo(shaftEnd.x - perpendicularX * neckHalf, shaftEnd.y - perpendicularY * neckHalf);
-  ctx.lineTo(from.x - perpendicularX * tailHalf, from.y - perpendicularY * tailHalf);
-  ctx.arc(from.x, from.y, tailHalf, angle - Math.PI / 2, angle + Math.PI / 2, true);
+  ctx.moveTo(from.x + perpX * half, from.y + perpY * half);
+  ctx.lineTo(neck.x + perpX * half, neck.y + perpY * half);
+  ctx.lineTo(neck.x - perpX * half, neck.y - perpY * half);
+  ctx.lineTo(from.x - perpX * half, from.y - perpY * half);
+  ctx.arc(from.x, from.y, half, angle + Math.PI / 2, angle - Math.PI / 2);
   ctx.closePath();
-  ctx.fill();
-
-  clearAnnotationShadow(ctx);
-  ctx.stroke();
+  ctx.moveTo(to.x, to.y);
+  ctx.lineTo(base.x + perpX * headHalf, base.y + perpY * headHalf);
+  ctx.lineTo(base.x - perpX * headHalf, base.y - perpY * headHalf);
+  ctx.closePath();
+  ctx.fill("nonzero");
   ctx.restore();
 }
 
@@ -1513,18 +1781,23 @@ function drawText(ctx, operation) {
   ctx.restore();
 }
 
+// A filled circle with its number, inside a white ring that keeps it readable
+// on dark pages. The ring scales with the marker.
 function drawStep(ctx, operation) {
-  const radius = operation.radius || Math.max(36, operation.textSize * 1.24);
+  const radius = stepRadius(operation);
+  const ring = stepRing(operation);
 
   ctx.save();
-  ctx.fillStyle = operation.color;
-  ctx.strokeStyle = "#fff";
-  ctx.lineWidth = Math.max(2, operation.strokeWidth);
+  ctx.fillStyle = "#fff";
   applyAnnotationShadow(ctx, radius * 0.35);
+  ctx.beginPath();
+  ctx.arc(operation.point.x, operation.point.y, radius + ring, 0, Math.PI * 2);
+  ctx.fill();
+  clearAnnotationShadow(ctx);
+  ctx.fillStyle = operation.color;
   ctx.beginPath();
   ctx.arc(operation.point.x, operation.point.y, radius, 0, Math.PI * 2);
   ctx.fill();
-  ctx.stroke();
 
   ctx.fillStyle = "#fff";
   ctx.font = `800 ${Math.max(14, radius * 0.95)}px system-ui, sans-serif`;
@@ -1588,23 +1861,47 @@ function drawPixelatedBaseRegion(ctx, operation) {
   ctx.restore();
 }
 
-function drawEffectOutline(ctx, operation) {
-  const { rect } = operation;
-  if (!rect || rect.width < 2 || rect.height < 2) return;
+// The real blur, in the editor as in the export, from the image under it.
+// Blurring a large area takes a while, so each area's result is kept until
+// it moves, resizes, changes strength or the image changes.
+const blurCache = new Map();
 
-  strokeDashedRect(ctx, rect);
+function drawBlurredBaseRegion(ctx, operation) {
+  const { rect } = operation;
+  if (!editor.baseCanvas || rect.width < 2 || rect.height < 2) return;
+  const blur = Math.max(2, operation.strokeWidth);
+  const key = [rect.x, rect.y, rect.width, rect.height, blur].map((n) => Math.round(n)).join(",");
+  let entry = operation.id ? blurCache.get(operation.id) : null;
+  if (!entry || entry.key !== key || entry.base !== editor.baseCanvas) {
+    const pad = Math.ceil(blur * 3);
+    const x = Math.max(0, Math.floor(rect.x - pad));
+    const y = Math.max(0, Math.floor(rect.y - pad));
+    const right = Math.min(editor.baseCanvas.width, Math.ceil(rect.x + rect.width + pad));
+    const bottom = Math.min(editor.baseCanvas.height, Math.ceil(rect.y + rect.height + pad));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, right - x);
+    canvas.height = Math.max(1, bottom - y);
+    const blurred = canvas.getContext("2d");
+    blurred.filter = `blur(${blur}px)`;
+    blurred.drawImage(editor.baseCanvas, x, y, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+    entry = { key, base: editor.baseCanvas, canvas, x, y };
+    if (operation.id) blurCache.set(operation.id, entry);
+  }
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(rect.x, rect.y, rect.width, rect.height);
+  ctx.clip();
+  ctx.drawImage(entry.canvas, entry.x, entry.y);
+  ctx.restore();
 }
 
-// Editor-only outline for areas being drawn: dark dashes on white.
-function strokeDashedRect(ctx, rect) {
-  const px = cssPixel();
+// While a blur area is drawn, moved or resized: a light fill, blurred on
+// release.
+function drawBlurPreview(ctx, operation) {
+  const { rect } = operation;
   ctx.save();
-  ctx.lineWidth = 2 * px;
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
-  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
-  ctx.strokeStyle = "#111111";
-  ctx.setLineDash([6 * px, 4 * px]);
-  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+  ctx.fillStyle = "rgba(144, 151, 161, 0.35)";
+  ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
   ctx.restore();
 }
 
@@ -1646,38 +1943,17 @@ function applyRedact(ctx, operation) {
 function drawPreview(ctx, operation) {
   if (operation.type === "pixelate") {
     drawPixelatedBaseRegion(ctx, operation);
-    drawEffectOutline(ctx, operation);
     return;
   }
-
   if (operation.type === "redact") {
     applyRedact(ctx, operation);
     return;
   }
   if (operation.type === "blur") {
-    drawEffectMarker(ctx, operation);
+    drawBlurPreview(ctx, operation);
     return;
   }
   applyOperation(ctx, operation);
-}
-
-// The pending crop: everything outside it dimmed, its edges draggable.
-function drawCropOverlay(ctx) {
-  const rect = editor.cropDraft;
-  if (!rect) return;
-  const { width, height } = editor.baseCanvas;
-  const px = cssPixel();
-  ctx.save();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
-  ctx.beginPath();
-  ctx.rect(0, 0, width, height);
-  ctx.rect(rect.x, rect.y, rect.width, rect.height);
-  ctx.fill("evenodd");
-  ctx.lineWidth = 2 * px;
-  ctx.strokeStyle = "#ffffff";
-  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
-  ctx.restore();
-  for (const handle of cropHandles(rect)) drawHandle(ctx, handle.x, handle.y);
 }
 
 function cropHandles(rect) {
@@ -1705,24 +1981,16 @@ function applyOperation(ctx, operation) {
   if (operation.type === "redact") applyRedact(ctx, operation);
 }
 
-function drawEffectMarker(ctx, operation) {
-  const { rect } = operation;
-  if (!rect || rect.width < 2 || rect.height < 2) return;
-
-  ctx.save();
-  ctx.fillStyle = "rgba(17, 17, 17, 0.12)";
-  ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-  ctx.restore();
-  strokeDashedRect(ctx, rect);
-}
-
 function drawEditorOperation(ctx, operation) {
   if (operation.type === "pixelate") {
     drawPixelatedBaseRegion(ctx, operation);
     return;
   }
   if (operation.type === "blur") {
-    drawEffectMarker(ctx, operation);
+    const editing =
+      editor.interaction && editor.interaction.type !== "crop" && editor.operations[editor.selectedIndex] === operation;
+    if (editing) drawBlurPreview(ctx, operation);
+    else drawBlurredBaseRegion(ctx, operation);
     return;
   }
   applyOperation(ctx, operation);
@@ -1741,9 +2009,10 @@ function redraw(preview = null) {
     drawEditorOperation(editor.ctx, operation);
   }
   if (preview) drawPreview(editor.ctx, preview);
-  if (!preview) drawSelection(editor.ctx);
-  if (editor.currentTool === "crop") drawCropOverlay(editor.ctx);
+  // The label being typed, in its final colour and size.
+  if (editor.textDraft?.text) applyOperation(editor.ctx, editor.textDraft);
   editor.ctx.setTransform(1, 0, 0, 1, 0, 0);
+  renderOverlay();
   scheduleNavigatorRender();
 }
 
@@ -2160,7 +2429,10 @@ function setupZoomControls() {
   window.addEventListener("resize", () => {
     if (editor.zoomMode === "fit") applyZoom(fitZoom(), "fit");
     else if (editor.zoomMode === "page") applyZoom(fitPageZoom(), "page");
-    else syncNavigator();
+    else {
+      syncNavigator();
+      renderOverlay();
+    }
   });
   requestAnimationFrame(() => applyZoom(fitZoom(), "fit"));
 }
@@ -2257,7 +2529,14 @@ function setupNavigator() {
   map.addEventListener("pointermove", (event) => {
     if (map.hasPointerCapture(event.pointerId)) jump(event);
   });
-  stage.addEventListener("scroll", () => syncNavigator(), { passive: true });
+  stage.addEventListener(
+    "scroll",
+    () => {
+      syncNavigator();
+      renderOverlay();
+    },
+    { passive: true }
+  );
 }
 
 function loadProjectState(project) {
@@ -3079,7 +3358,7 @@ function setupAnnotationControls(baseName) {
 
   /* ------------------------------ pointer ---------------------------- */
 
-  editor.canvas.addEventListener("pointerdown", (event) => {
+  function onCanvasPointerDown(event) {
     const point = pointerToCanvasPoint(event);
 
     if (editor.currentTool === "crop") {
@@ -3101,7 +3380,7 @@ function setupAnnotationControls(baseName) {
 
     // The selected annotation's handles resize it in any tool.
     const selected = editor.operations[editor.selectedIndex];
-    const handle = selected ? handleAtPoint(selected, point) : null;
+    const handle = selected ? handleAtClient(selected, event.clientX, event.clientY) : null;
     if (selected && handle) {
       event.preventDefault();
       finalizeStyleEdit();
@@ -3109,6 +3388,7 @@ function setupAnnotationControls(baseName) {
       editor.interaction = {
         type: "resize",
         handle: handle.name,
+        startPoint: point,
         startOperation: cloneOperation(selected),
         startBounds: operationBounds(selected),
       };
@@ -3176,16 +3456,30 @@ function setupAnnotationControls(baseName) {
     } else {
       editor.draft = makeDragOperation(editor.currentTool, point, point);
     }
+  }
+
+  editor.canvas.addEventListener("pointerdown", onCanvasPointerDown);
+  // Handles and the crop frame reach a few pixels past the image's edge,
+  // where the pointer lands on the canvas area instead of the canvas.
+  document.getElementById("stage").addEventListener("pointerdown", (event) => {
+    if (event.target === editor.canvas || event.button !== 0) return;
+    const selected = editor.operations[editor.selectedIndex];
+    const onHandle = selected && editor.currentTool !== "crop" && handleAtClient(selected, event.clientX, event.clientY);
+    const onCrop = editor.currentTool === "crop" && cropEdgeAt(pointerToCanvasPoint(event));
+    if (onHandle || onCrop) onCanvasPointerDown(event);
   });
 
+  const HANDLE_CURSORS = { ...EDGE_CURSORS, from: "move", to: "move", "step-se": "nwse-resize", "step-nw": "nwse-resize" };
+
   // What the pointer would do here, as a cursor, in the tools that move things.
-  function syncHoverCursor(point) {
+  function syncHoverCursor(point, event) {
     let cursor = "";
     if (editor.currentTool === "crop") {
       cursor = EDGE_CURSORS[cropEdgeAt(point)] || "";
     } else {
       const selected = editor.operations[editor.selectedIndex];
-      if (selected && handleAtPoint(selected, point)) cursor = "nwse-resize";
+      const handle = selected && handleAtClient(selected, event.clientX, event.clientY);
+      if (handle) cursor = HANDLE_CURSORS[handle.name] || "move";
       else if (editor.currentTool === "select" && operationAtPoint(point) >= 0) cursor = "move";
     }
     editor.canvas.style.cursor = cursor;
@@ -3222,12 +3516,16 @@ function setupAnnotationControls(baseName) {
         editor.interaction.lastPoint = point;
       }
       if (editor.interaction.type === "resize") {
+        const { startOperation, startBounds, handle, startPoint } = editor.interaction;
+        const delta = { x: point.x - startPoint.x, y: point.y - startPoint.y };
+        const anchor = handleAnchor(startOperation, startBounds, handle);
         resizeOperation(
           operation,
-          editor.interaction.startOperation,
-          editor.interaction.startBounds,
-          editor.interaction.handle,
-          point
+          startOperation,
+          startBounds,
+          handle,
+          { x: anchor.x + delta.x, y: anchor.y + delta.y },
+          delta
         );
       }
       requestRedraw();
@@ -3235,7 +3533,7 @@ function setupAnnotationControls(baseName) {
     }
 
     if (!editor.draft || !editor.dragStart) {
-      syncHoverCursor(point);
+      syncHoverCursor(point, event);
       return;
     }
     event.preventDefault();
@@ -3552,17 +3850,40 @@ async function saveUploadToHistory(url) {
   await chrome.storage.local.set({ history });
 }
 
-// A capture can succeed only partially: budgets stop very long pages, pinned
-// elements can hide rows, and a mid-capture zoom breaks alignment. Say so
-// rather than handing back a silently incomplete image.
+const NOTICE_ICONS = {
+  info: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#BDBDBD" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg>',
+  warning: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#F5B83D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9.5 17h-19z"></path><path d="M12 10v4M12 17h.01"></path></svg>',
+};
+
+// One notice per capture, its wording built from everything that happened:
+// a capture can succeed only partially (budgets stop very long pages, pinned
+// elements can hide rows, a mid-capture zoom breaks alignment), images may
+// not have loaded, and a page too tall for one image is saved in parts. A
+// warning icon means something is missing; info means it is all there. Of
+// the two fixes, recapturing comes first: it changes what was captured.
 function captureNotice(capture, report) {
-  const parts = [];
-  if (capture.truncated?.message) {
-    parts.push(`Partial capture: ${capture.truncated.message}`);
+  const messages = [];
+  let warning = false;
+  let action = null;
+  const truncated = capture.truncated;
+  if (truncated?.reason === "height") {
+    const limit = Number(/(\d+)px/.exec(truncated.message || "")?.[1]);
+    messages.push(
+      limit
+        ? `Stopped at the ${limit.toLocaleString("en-US")}px limit; the page is taller.`
+        : truncated.message
+    );
+    warning = true;
+  } else if (truncated?.message) {
+    messages.push(`Partial capture: ${truncated.message}`);
+    warning = true;
   }
-  if (report.scaleWarning) parts.push(report.scaleWarning);
+  if (report.scaleWarning) {
+    messages.push(report.scaleWarning);
+    warning = true;
+  }
   if (report.downscaled) {
-    parts.push(
+    messages.push(
       `The page was taller than a single image can be, so it was scaled to ${Math.round(
         report.downscaled * 100
       )}% to fit rather than cut short.`
@@ -3570,25 +3891,57 @@ function captureNotice(capture, report) {
   }
   if (report.gaps?.length) {
     const missing = report.gaps.reduce((sum, gap) => sum + (gap.to - gap.from), 0);
-    parts.push(`${Math.round(missing)}px of the page could not be captured.`);
+    messages.push(`${Math.round(missing)}px of the page could not be captured.`);
+    warning = true;
   }
-  return parts.join(" ");
+  const loading = capture.loading;
+  if (loading?.frames > 0 && capture.sourceTabId) {
+    if (loading.waited) {
+      messages.push("Some images still hadn't loaded, even after waiting.");
+    } else {
+      messages.push("Some images hadn't finished loading.");
+      action = {
+        label: "Recapture, waiting for images",
+        run: async () => {
+          const response = await chrome.runtime.sendMessage({
+            type: "recapture",
+            tabId: capture.sourceTabId,
+            url: capture.pageUrl,
+          });
+          if (!response?.ok) throw new Error(response?.error || "Couldn't recapture the page.");
+        },
+      };
+    }
+  }
+  if (editor.parts) {
+    const count = editor.parts.length;
+    messages.push(
+      truncated?.reason === "height"
+        ? `Saved in ${count} parts at full resolution.`
+        : `Too tall for one image, so it's saved in ${count} parts at full resolution.`
+    );
+    action = action || {
+      label: "Save as one smaller image",
+      run: () => document.querySelector('[data-download="smaller"]').click(),
+    };
+  }
+  if (!messages.length) return null;
+  return { text: messages.join(" "), kind: warning ? "warning" : "info", action };
 }
 
-// Notices above the screenshot. Problems are explained where they show, and
-// the two that have a fix carry it: images that had not loaded (recapture,
-// waiting for them) and a page too tall for one image (a smaller single
-// image instead of parts).
-function addNotice(text, action) {
+// A notice above the screenshot, with an optional action and a close button.
+function addNotice({ text, kind = "info", action = null }) {
   const box = document.createElement("div");
   box.className = "notice";
+  box.setAttribute("role", "status");
+  box.insertAdjacentHTML("beforeend", NOTICE_ICONS[kind] || NOTICE_ICONS.info);
   const message = document.createElement("p");
   message.textContent = text;
   box.appendChild(message);
   if (action) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "control-button";
+    button.className = "notice-action";
     button.textContent = action.label;
     button.addEventListener("click", async () => {
       button.disabled = true;
@@ -3607,41 +3960,19 @@ function addNotice(text, action) {
   dismiss.className = "dismiss";
   dismiss.title = "Dismiss";
   dismiss.setAttribute("aria-label", "Dismiss");
-  dismiss.textContent = "×";
-  dismiss.addEventListener("click", () => box.remove());
+  dismiss.innerHTML = CLOSE_ICON;
+  dismiss.addEventListener("click", () => {
+    box.remove();
+    renderOverlay();
+    syncNavigator();
+  });
   box.appendChild(dismiss);
-  document.getElementById("notices").appendChild(box);
+  document.getElementById("notices").replaceChildren(box);
 }
 
 function showCaptureNotices(capture, report) {
-  const text = captureNotice(capture, report);
-  if (text) addNotice(text);
-
-  const loading = capture.loading;
-  if (loading?.frames > 0 && capture.sourceTabId) {
-    if (loading.waited) {
-      addNotice("Some images still hadn't loaded, even after waiting.");
-    } else {
-      addNotice("Some images hadn't finished loading.", {
-        label: "Recapture, waiting for them",
-        run: async () => {
-          const response = await chrome.runtime.sendMessage({
-            type: "recapture",
-            tabId: capture.sourceTabId,
-            url: capture.pageUrl,
-          });
-          if (!response?.ok) throw new Error(response?.error || "Couldn't recapture the page.");
-        },
-      });
-    }
-  }
-
-  if (editor.parts) {
-    addNotice(`Too tall for one image, so it's saved in ${editor.parts.length} parts at full resolution.`, {
-      label: "Download one smaller image",
-      run: () => document.querySelector('[data-download="smaller"]').click(),
-    });
-  }
+  const notice = captureNotice(capture, report);
+  if (notice) addNotice(notice);
 }
 
 async function main() {
@@ -3702,6 +4033,7 @@ async function main() {
   editor.pageUrl = capture.pageUrl || "";
   editor.capturedAt = capture.capturedAt || Date.now();
   const defaults = await loadEditorDefaults();
+  editor.textHintUses = (await chrome.storage.local.get("textHintUses")).textHintUses || 0;
   if (defaults.jpegQuality) editor.jpegQuality = defaults.jpegQuality;
   // A reopened project keeps its own layout; a new capture starts from the
   // saved default.

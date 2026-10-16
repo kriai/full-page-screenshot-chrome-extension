@@ -278,30 +278,47 @@
     }
     @keyframes dots { to { width: 1.2em; } }
 
-    /* Notices above the screenshot, some with an action. */
-    .notices { display: grid; gap: 8px; width: 100%; max-width: 760px; margin-bottom: 16px; }
+    /* One notice above the screenshot, with an optional action. */
+    .notices { width: 100%; max-width: 760px; margin-bottom: 16px; }
     .notices:empty { display: none; }
     .notice {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
+      min-height: 44px;
+      border: 1px solid var(--divider);
       border-radius: 8px;
-      background: var(--surface);
-      box-shadow: inset 0 0 0 1px var(--hairline);
-      color: var(--text-2);
+      background: var(--menu);
+      color: var(--text-1);
       font-size: 13px;
-      padding: 8px 10px;
+      padding: 6px 8px 6px 12px;
     }
-    .notice p { flex: 1; margin: 0; line-height: 1.45; }
-    .notice .control-button { font-size: 12px; padding: 0 12px; }
+    .notice p { flex: 1; margin: 0; line-height: 1.4; }
+    .notice-action {
+      flex: none;
+      height: 28px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text-2);
+      font-size: 12px;
+      padding: 0 10px;
+      white-space: nowrap;
+    }
+    .notice-action:hover:not(:disabled) { background: var(--control); color: var(--text-1); }
     .notice .dismiss {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+      width: 28px;
+      height: 28px;
       border: 0;
+      border-radius: 6px;
       background: transparent;
       color: var(--text-5);
-      font-size: 16px;
-      line-height: 1;
-      padding: 2px 4px;
     }
+    .notice .dismiss:hover { background: var(--control); color: var(--text-1); }
 
     /* Floating pager for captures saved in parts. */
     .part-pager {
@@ -311,28 +328,40 @@
       z-index: 5;
       display: inline-flex;
       align-items: center;
-      gap: 2px;
+      gap: 4px;
+      height: 32px;
       transform: translateX(-50%);
-      border-radius: 999px;
-      background: var(--menu);
-      box-shadow: 0 0 0 1px var(--border), 0 12px 32px rgba(0, 0, 0, 0.45);
-      color: var(--text-2);
-      font-size: 13px;
-      padding: 4px;
+      border: 1px solid var(--divider);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--text-1);
+      font-size: 12px;
+      padding: 0 4px;
     }
-    .part-pager span { padding: 0 10px; font-variant-numeric: tabular-nums; }
+    .part-pager span { padding: 0 4px; font-variant-numeric: tabular-nums; white-space: nowrap; }
     .part-pager button {
-      width: 30px;
-      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
       border: 0;
-      border-radius: 999px;
+      border-radius: 4px;
       background: transparent;
       color: var(--text-1);
-      font-size: 20px;
-      line-height: 1;
     }
     .part-pager button:hover:not(:disabled) { background: var(--control); }
     .part-pager button:disabled { color: var(--text-off); }
+
+    /* Selection outlines, handles and the crop frame, at screen size. */
+    #overlayCanvas {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
 
     /* ------------------------- page navigator ------------------------- */
     .page-nav {
@@ -648,38 +677,58 @@
       pointer-events: none;
     }
 
-    /* The text box placed on the screenshot while typing a label. */
-    .text-editor-wrap { position: absolute; z-index: 2; min-width: 180px; }
-    .text-editor {
-      min-width: 180px;
-      min-height: 42px;
-      border: 2px solid var(--text-1);
-      border-radius: 6px;
-      background: rgba(17, 17, 17, 0.92);
+    /* The input that floats beside a label while it is typed. */
+    .text-input {
+      position: absolute;
+      z-index: 6;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 360px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      padding: 4px 4px 4px 10px;
+    }
+    .text-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+    .text-field {
+      min-width: 120px;
+      max-width: 260px;
       color: var(--text-1);
-      font-family: system-ui, sans-serif;
-      font-weight: 700;
-      line-height: 1.2;
+      font-size: 13px;
+      line-height: 20px;
       outline: none;
-      padding: 6px 8px;
       white-space: pre-wrap;
       word-break: break-word;
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
     }
-    .text-editor:empty::before { color: rgba(255, 255, 255, 0.55); content: attr(data-placeholder); }
-    .text-editor-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
-    .text-editor-actions button {
-      min-height: 28px;
+    .text-field:empty::before { color: var(--text-5); content: attr(data-placeholder); }
+    .text-done,
+    .text-cancel {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+      width: 24px;
+      height: 24px;
       border: 0;
-      border-radius: 6px;
-      background: var(--control);
-      box-shadow: inset 0 0 0 1px var(--border);
-      color: var(--text-2);
-      font-size: 12px;
-      padding: 0 10px;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--text-3);
     }
-    .text-editor-actions button.primary { color: var(--text-1); font-weight: 500; }
-    .text-editor-actions button:hover { background: var(--divider); }
+    .text-done { margin-left: 4px; background: var(--primary-bg); color: var(--primary-fg); }
+    .text-cancel:hover { background: var(--control); color: var(--text-1); }
+    .text-hint {
+      position: absolute;
+      z-index: 6;
+      border-radius: 3px;
+      background: #ffffff;
+      color: #6b6b6b;
+      font-size: 11px;
+      line-height: 16px;
+      padding: 0 4px;
+      pointer-events: none;
+    }
 
     @media (max-width: 960px) {
       :root { --panel: 248px; --nav: 0px; }
@@ -812,10 +861,11 @@
           </div>
         </div>
       </div>
+      <canvas id="overlayCanvas" aria-hidden="true"></canvas>
       <nav class="part-pager" id="partNav" hidden aria-label="Parts of this capture">
-        <button type="button" id="partPrev" title="Previous part ([)" aria-label="Previous part">&lsaquo;</button>
+        <button type="button" id="partPrev" title="Previous part ([)" aria-label="Previous part"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></button>
         <span id="partLabel"></span>
-        <button type="button" id="partNext" title="Next part (])" aria-label="Next part">&rsaquo;</button>
+        <button type="button" id="partNext" title="Next part (])" aria-label="Next part"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button>
       </nav>
     </main>
 
