@@ -268,6 +268,12 @@ and attaches them to the capture handed to the viewer.
 - `captureVisibleTab` is rate-limited to ~2 calls/sec, so long pages take a
   moment; the toolbar badge shows progress.
 
+## Privacy
+
+No accounts, analytics or tracking; captures stay in local browser storage
+unless you click Upload. See [PRIVACY.md](PRIVACY.md), which is the privacy
+policy linked from the Chrome Web Store listing.
+
 ## Releasing
 
 Packaging is automated. Merging to `main` runs
