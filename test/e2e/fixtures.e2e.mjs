@@ -32,7 +32,7 @@ after(async () => {
 
 async function captureFixture(
   name,
-  { deviceScaleFactor = 1, viewport, mode = "fullPage", pick, query = "", budget, options = {}, settings, inspect } = {}
+  { deviceScaleFactor = 1, viewport, mode = "fullPage", pick, query = "", budget, options = {}, settings, inspect, ready } = {}
 ) {
   const harness = await launch({ deviceScaleFactor, viewport });
   try {
@@ -41,6 +41,8 @@ async function captureFixture(
     const page = await harness.context.newPage();
     await page.goto(`${server.origin}/test/fixtures/${name}.html${query}`);
     await page.waitForLoadState("load");
+    // What a person would wait to see before reaching for the button.
+    if (ready) await page.waitForSelector(ready);
     const result = await capture(harness, page, { mode, pick, options, diagnostics: true, keepEditor: !!inspect });
     assert.equal(result.error, null, `capture failed: ${result.error}`);
     assert.ok(result.hasImage, "the capture produced no image");
@@ -125,9 +127,14 @@ describe("capture", { concurrency: CONCURRENCY }, () => {
 
   // "Wait for slow content": rows arrive 1.5s after their section scrolls
   // into view, behind a skeleton the same height, so nothing in the layout
-  // says to wait. Only the network tracker does.
+  // says to wait. Only the network tracker does. It cannot see requests that
+  // started before the capture, so the page is first allowed to show its
+  // opening section, as it would be before anyone clicked.
   it("full page: slow-network with wait for slow content", { timeout: TIMEOUT }, async () => {
-    const captured = await captureFixture("slow-network", { options: { waitForContent: true } });
+    const captured = await captureFixture("slow-network", {
+      options: { waitForContent: true },
+      ready: '[data-row="19"]',
+    });
     assertFullPage(captured, { expected: range(0, 120) });
   });
 
