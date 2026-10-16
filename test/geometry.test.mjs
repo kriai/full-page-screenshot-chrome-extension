@@ -713,3 +713,35 @@ test("a pane filling its window needs no furniture", () => {
   assert.equal(box.footerHeight, 0);
   assert.equal(box.height, layout.height);
 });
+
+test("fitOutputScale leaves room for the stitcher's rounding", () => {
+  for (const height of [32768, 40001, 58701, 80000, 123457, 163000]) {
+    const fit = G.fitOutputScale(1280, height);
+    assert.ok(fit > 0, `${height}px should still fit`);
+    assert.ok(Math.ceil(height * fit) <= G.MAX_CANVAS_SIDE, `${height}px rounds past the limit`);
+  }
+});
+
+test("CaptureWalk keeps moving when pinned elements eat most of the band", () => {
+  // react.dev before the sticky-column fix: an 80px band at 360px, and an
+  // overlap larger than the band. The walk used to aim at 0 forever.
+  const walk = new G.CaptureWalk({ overlap: 266 });
+  const tops = [];
+  let scrollTop = 0;
+  for (let i = 0; i < 6; i++) {
+    scrollTop = walk.nextTop(18000);
+    tops.push(scrollTop);
+    walk.accept({ scrollTop, trimTop: 360, trimBottom: 360, source: { height: 80 }, dest: { top: scrollTop + 360 } });
+  }
+  for (let i = 1; i < tops.length; i++) assert.ok(tops[i] > tops[i - 1], `stalled at ${tops[i]}`);
+});
+
+test("CaptureWalk follows content that collapses above the viewport", () => {
+  // Frame 1 covers content 0-800. Before frame 2, 200px of ad slots above the
+  // viewport collapse: the rows captured at 600-800 now sit at 400-600.
+  const walk = new G.CaptureWalk({ overlap: 64 });
+  walk.accept({ scrollTop: 0, source: { height: 800 }, dest: { top: 0 } });
+  walk.shift(-200);
+  assert.equal(walk.covered, 600);
+  assert.equal(walk.nextTop(10000), 536);
+});

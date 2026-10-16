@@ -86,14 +86,20 @@ First baseline (2026-10-16, 1x, headless):
 | The Verge | Stuck, 132 px gap | The page shrinks while scrolling (ads collapsing); drift correction of -878 px |
 | npm, Stack Overflow, Unsplash | Blank white page | Bot protection in headless Chromium; replace these sites or run with `HEADED=1` |
 
-Fixes, each with a fixture that reproduces it:
-- Tall, narrow pinned elements beside the content (sticky or fixed) are side
-  rails, not headers or footers: unpin them in place instead of trimming.
-- The capture walk always advances by at least a minimum share of the band,
-  whatever the overlap.
-- A page over the content budget is captured up to the budget and reported as
-  partial.
-- Diagnose the dev.to stitcher failure and the shrinking-page gap.
+Fixed on `competitive-parity`, each with a fixture that failed first:
+
+| Bug | Fix | Fixture |
+| --- | --- | ------- |
+| Sticky side columns read as header/footer | Released into the page flow for the capture (`fpsStickyRail`) | `sticky-rails.html`, `?full=1` |
+| Walk stalls when pinned elements eat the band | Always advance at least half the last band (`CaptureWalk.nextTop`) | unit test |
+| Pages over the height budget refused | Budget checked against what was captured; stitcher plans for what the budgets can reach | `very-tall.html` |
+| Shrunk stitch one pixel over the canvas limit | `fitOutputScale` leaves 4px for rounding | `infinite-feed.html`, unit test |
+| `#hash` updates while scrolling cancelled the capture (react.dev) | Only a change before the hash, or a reload, cancels | `scrollspy.html` |
+| Shrinking page reported stuck; seams compared in stale coordinates, re-takes exhausted, rows repeated | Walk follows measured drift; completion uses live height; seam probe uses corrected positions | `collapsing-ads.html` |
+
+The stitcher's failure message is now recorded in the diagnostics
+(`stitchError`). npm, Stack Overflow and Unsplash still serve a blank page to
+headless Chromium; they stay in the list for headed runs.
 
 ## 2. Image storage in IndexedDB, frames out of memory
 

@@ -808,6 +808,19 @@
     };
   }
 
+  // A sticky column beside the content: narrow, and covering most of the
+  // band's height. Released with `position: relative` rather than static, so
+  // it stays the containing block for anything absolutely positioned inside;
+  // top and bottom are cleared or the sticky offset would become a shift.
+  function fpsStickyRail(node, box, band) {
+    const bandWidth = band.bandRight - band.bandLeft;
+    const bandHeight = band.bandBottom - band.bandTop;
+    const visible = Math.min(box.bottom, band.bandBottom) - Math.max(box.top, band.bandTop);
+    if (box.right - box.left > bandWidth * 0.4) return null;
+    if (visible < bandHeight * 0.7) return null;
+    return { node, style: { position: "relative", top: "auto", bottom: "auto" } };
+  }
+
   // A pinned element's own rectangle is not always what it paints: ChatGPT's
   // composer, for one, hangs its scroll-to-bottom button above the sticky box.
   // Absorb descendants that render right against the box so the whole pinned
@@ -899,6 +912,8 @@
     for (const node of fpsCollectElements()) {
       if (node.closest("[data-fps-ui]")) continue;
       if (el && (node === el || node.contains(el))) continue;
+      // Inside a column that is being released below: it goes with it.
+      if (toUnpin.some((rail) => rail.node.contains(node))) continue;
 
       const r = node.getBoundingClientRect();
       if (r.width < 4 || r.height < 4) continue;
@@ -939,6 +954,21 @@
       // like everything else and needs no special handling below.
       if (fixed && !insideTarget) {
         const rail = fpsRailPlacement(node, box, vw, vh);
+        if (rail) {
+          toUnpin.push(rail);
+          continue;
+        }
+      }
+
+      // A sticky navigation column beside the content (MDN, react.dev) touches
+      // the top or bottom of the window, so it reads as a header or footer -
+      // and trimming the band around a column that runs the full height left
+      // react.dev with an 80px strip. It is page content that happens to be
+      // pinned; letting it sit in its natural place in the flow shows it once,
+      // at the top of its column, like the rest of the page. Unlike a
+      // composer, releasing a side column changes nothing an app reacts to.
+      if (position === "sticky") {
+        const rail = fpsStickyRail(node, box, { bandTop, bandBottom, bandLeft, bandRight });
         if (rail) {
           toUnpin.push(rail);
           continue;

@@ -994,6 +994,7 @@ function beginSession(tab) {
   const session = {
     tabId: tab.id,
     windowId: tab.windowId,
+    url: tab.url || "",
     startedAt: Date.now(),
     canceledReason: "",
   };
@@ -1013,8 +1014,17 @@ function cancelSession(tabId, reason) {
 // captureVisibleTab always grabs the window's active tab, so anything that
 // moves the page or the focus out from under us has to stop the run.
 chrome.tabs.onRemoved.addListener((tabId) => cancelSession(tabId, "The tab was closed."));
+// Only the part before the hash counts. Docs sites rewrite `#section` as you
+// scroll past each heading (react.dev does), and the capture is the thing
+// doing the scrolling - treating that as navigation cancelled every capture
+// of those pages. Chrome also reports those in-page updates as "loading", so
+// that status cannot stand for a reload; a reload is caught instead by the
+// page engine vanishing (see `measureOrCancel`).
+const withoutHash = (url) => (url || "").split("#")[0];
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.url || changeInfo.status === "loading") {
+  const session = activeSessions.get(tabId);
+  if (!session || !changeInfo.url) return;
+  if (withoutHash(changeInfo.url) !== withoutHash(session.url)) {
     cancelSession(tabId, "The page navigated during capture.");
   }
 });
@@ -1028,6 +1038,15 @@ chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
 
 function checkCanceled(session) {
   if (session.canceledReason) throw new CaptureCanceled(session.canceledReason);
+}
+
+// The engine lives in the page, so a page that reloaded has none: the call
+// comes back empty instead of with a measurement.
+async function measureOrCancel(tabId, session, request) {
+  const measured = await callPage(tabId, "measureFrame", request);
+  checkCanceled(session);
+  if (!measured) throw new CaptureCanceled("The page reloaded during capture.");
+  return measured;
 }
 
 async function injectPageEngine(tabId) {
@@ -1228,7 +1247,6 @@ async function runCaptureLoop(tab, session, target) {
   // so it has to keep speaking the page's own coordinates. Only the geometry
   // handed to the viewer is corrected.
   let driftPx = 0;
-  let prevMeasured = null;
   let prevBitmap = null;
   let seamShifts = 0;
   let seamRetries = 0;
@@ -1238,6 +1256,14 @@ async function runCaptureLoop(tab, session, target) {
   let lastDestTop = -1;
   let shell = null;
   const stitcher = new IncrementalStitcher(target);
+  // The most the budgets let one run capture: the height cap, or the frame cap
+  // at a full viewport per frame, whichever comes first. The stitcher plans its
+  // canvas for this rather than the page, so a page past the budget is shrunk
+  // only as far as the captured part needs.
+  const reachableHeight = Math.min(
+    BUDGET.maxContentHeight,
+    BUDGET.maxFrames * Math.max(1, target.viewportHeight)
+  );
 
   // Frames deliberately share a strip of content. It absorbs a pinned element
   // that grows between frames, and it is the only material the seam probe has
@@ -1272,10 +1298,13 @@ async function runCaptureLoop(tab, session, target) {
         truncated = { reason: "time", message: "Stopped after the capture time limit." };
         break;
       }
-      if (contentHeight > BUDGET.maxContentHeight) {
+      // Measured against what has been captured, not the page's height: a page
+      // taller than the budget is captured up to it and reported as partial,
+      // rather than refused before the first frame.
+      if (walk.covered >= BUDGET.maxContentHeight) {
         truncated = {
           reason: "height",
-          message: `The page is taller than the ${BUDGET.maxContentHeight}px capture limit.`,
+          message: `Stopped at the ${BUDGET.maxContentHeight}px capture limit; the page is taller.`,
         };
         break;
       }
@@ -1291,11 +1320,12 @@ async function runCaptureLoop(tab, session, target) {
       // The frame that lands at the very bottom is where bottom-pinned page
       // furniture belongs, so the page side is told which one that is.
       const isLast = requestedTop >= scrollRange - 1;
-      let measured = await callPage(tabId, "measureFrame", { isFirst: index === 0, isLast });
+      let measured = await measureOrCancel(tabId, session, { isFirst: index === 0, isLast });
       // Each measurement re-places the page anchor, so its drift is only ever
       // reported once; taking it as it arrives keeps the repair path below from
       // either double-counting or losing a shift.
       driftPx += measured.drift || 0;
+      walk.shift(measured.drift || 0);
 
       // If a pinned element grew and opened a gap, drop back by the shortfall
       // once rather than losing rows.
@@ -1305,8 +1335,9 @@ async function runCaptureLoop(tab, session, target) {
           top: Math.max(0, measured.scrollTop - shortfall),
           timeoutMs: 900,
         });
-        measured = await callPage(tabId, "measureFrame", { isFirst: false, isLast });
+        measured = await measureOrCancel(tabId, session, { isFirst: false, isLast });
         driftPx += measured.drift || 0;
+        walk.shift(measured.drift || 0);
       }
 
       // The first frame reveals what this page actually does. Pinned
@@ -1356,10 +1387,15 @@ async function runCaptureLoop(tab, session, target) {
       checkCanceled(session);
       let dataUrl = await captureVisibleTabRateLimited(tab.windowId);
 
+      // Both sides of the seam in the frames' own coordinates. The page's raw
+      // offsets moved when content above collapsed or loaded in, so comparing
+      // them read the wrong strips: every seam looked broken, the re-takes ran
+      // out, and a spurious match could finally slide a frame onto rows it
+      // repeated.
       const seam = await repairSeam({
         dataUrl,
-        measured,
-        prevMeasured,
+        measured: { ...measured, dest: { ...measured.dest, top: measured.dest.top - driftPx } },
+        prevMeasured: frames[frames.length - 1] || null,
         prevBitmap,
         retriesLeft: MAX_SEAM_RETRIES - seamRetries,
         recapture: async () => {
@@ -1400,6 +1436,8 @@ async function runCaptureLoop(tab, session, target) {
         });
         driftPx -= measured.drift || 0;
         driftPx -= seam.shift || 0;
+        // The walk followed the same bad reading; take it back there too.
+        walk.shift(-(measured.drift || 0));
         destTop = measured.dest.top - driftPx;
         driftRejections++;
       }
@@ -1416,13 +1454,18 @@ async function runCaptureLoop(tab, session, target) {
       };
       frames.push(frame);
       scales.push(seam.scale || measured.dpr);
-      await stitcher.append(frame, seam.bitmap, { contentHeight, shell });
+      // The stitcher sizes its canvas for the height it expects to fill. On a
+      // page past the budget that is what the budget can reach, not the page:
+      // planning for a 200,000px page shrinks the output to nothing.
+      await stitcher.append(frame, seam.bitmap, {
+        contentHeight: Math.min(contentHeight, reachableHeight),
+        shell,
+      });
       // The walk steers the live page, so it is fed the page's own numbers.
       const covered = walk.accept(measured);
 
       prevBitmap?.close();
       prevBitmap = seam.bitmap;
-      prevMeasured = measured;
 
       diagnostics?.push({
         event: "frame",
@@ -1493,7 +1536,10 @@ async function runCaptureLoop(tab, session, target) {
           continue;
         }
       }
-      if (walk.isComplete(measured, contentHeight)) break;
+      // The live height, not the tallest seen: a page that shrank while it was
+      // captured (collapsed ad slots) ends where it ends now, and comparing
+      // against its old height reported the finished capture as stuck.
+      if (walk.isComplete(measured, measured.contentHeight)) break;
       if (atBottom && measured.scrollTop === previousScrollTop) {
         // The target refuses to scroll further but content is still missing.
         truncated = {
@@ -1522,6 +1568,7 @@ async function runCaptureLoop(tab, session, target) {
   }
 
   let stitched = null;
+  let stitchError = stitcher.failed ? stitcher.failed.message : null;
   if (consistency.ok && sameWidth) {
     try {
       reportCaptureProgress({
@@ -1532,6 +1579,7 @@ async function runCaptureLoop(tab, session, target) {
       });
       stitched = await stitcher.finish();
     } catch (err) {
+      stitchError = err?.message || String(err);
       console.warn("Falling back to viewer-side stitching:", err);
     }
   }
@@ -1547,6 +1595,7 @@ async function runCaptureLoop(tab, session, target) {
       growthChecks,
       grewDuringRun,
       driftRejections,
+      stitchError,
       overlap,
       captureIntervalMs: Math.round(1000 / captureRate.perSecond),
       driftTotal: driftPx,

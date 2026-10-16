@@ -147,8 +147,18 @@ export controls.
   is the editor tab opened. This avoids a blank editor waiting to decode,
   stitch, re-encode, and save the same screenshot a second time.
 - **Bounded failures.** Time, frame count, page height and canvas budgets stop
-  runaway pages; the viewer then says the capture is partial and why. Capture is
-  cancelled if the tab navigates, closes, or stops being the active tab.
+  runaway pages; the viewer then says the capture is partial and why. A page
+  taller than the height budget is captured up to it, not refused. Capture is
+  cancelled if the tab navigates, reloads, closes, or stops being the active
+  tab. A page rewriting only the `#hash` as it scrolls is not navigating.
+- **Sticky side columns.** Docs-style navigation columns pinned beside the
+  content (MDN, react.dev) are let back into the page flow for the capture, so
+  they appear once at the top of their column instead of being trimmed out of
+  every frame.
+- **Pages that shrink while captured.** Ad slots that collapse after they
+  scroll past pull everything below them up. The scroll walk follows the
+  measured shift, seams are compared in the frames' corrected coordinates,
+  and the end of the page is judged by its current height.
 - **Progress without flicker.** Every frame is photographed, so progress stays
   in the extension popup instead of being drawn over the page. Its animated bar
   tracks captured sections. If the popup closes, the toolbar badge shows
@@ -172,14 +182,18 @@ packaged file set.
   fixture page at 1x, two of them at 2x, plus a visible-area capture. Each
   fixture row carries a black-and-white code at its left edge; the test reads
   the codes back out of the finished image and fails on any row that is
-  missing, repeated, out of order or the wrong height. `HEADED=1` shows the
-  browser. It runs against a test build (`scripts/test-build.mjs`, written to
+  missing, repeated, out of order or the wrong height. Each test runs in a
+  browser of its own, several at once (Chrome's screenshot quota is per
+  browser), so the suite takes about a minute; `E2E_CONCURRENCY` sets how many
+  run together. `HEADED=1` shows the browser. It runs against a test build (`scripts/test-build.mjs`, written to
   `build/test-extension/`) that adds host access to every site, because
   `activeTab` is only granted by a real click.
 - `npm run benchmark` captures the real sites in `test/benchmark/sites.json`
   and prints frames, time, partial captures, downscaling, gaps, seam shifts
   and re-takes, and frames shot while images were still loading. Images and
-  `results.json` go to `build/benchmark/`. Compare two runs with
+  `results.json` go to `build/benchmark/`. Sites run four at a time
+  (`--parallel N`), so timings are only comparable between runs with the same
+  setting. Compare two runs with
   `node scripts/benchmark.mjs --compare <before.json> <after.json>`; sites
   change daily, so only compare runs made on the same day.
 - `test/fixtures/*.html` are manual pages for the real extension: document
@@ -212,8 +226,9 @@ and attaches them to the capture handed to the viewer.
   with unstable offsets the capture is reported as incomplete.
 - Cross-origin iframes and closed shadow roots cannot be expanded or measured.
 - Selected-area capture is limited to the current visible viewport.
-- Extremely tall pages stop at the canvas budget (~32k px per side) with an
-  explanation rather than a broken image.
+- Pages past the height or frame budget (80,000px, 80 sections) are captured
+  up to it and reported as partial. A stitch taller than a canvas (~32k px)
+  is scaled down to fit.
 - The strip of content hidden behind a sticky bottom bar at the very end of a
   page cannot be reached, since hiding the bar risks disturbing the app. It is
   the bar's own footprint, so the capture is still reported as complete.

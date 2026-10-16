@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture: ad slots that collapse once scrolled past</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .ad { height: 180px; margin: 0; background: repeating-linear-gradient(45deg, #fde68a, #fde68a 12px, #fcd34d 12px, #fcd34d 24px); display: flex; align-items: center; justify-content: center; font-weight: 700; color: #92400e; }
+  .ad.gone { height: 0; overflow: hidden; }
+</style>
+<div class="banner">Fixture: every ad slot collapses after it leaves the top of the window, so the page shrinks under the capture</div>
+<div id="host"></div>
+<script src="rows.js"></script>
+<script>
+  // News front pages do this when an ad never fills: the slot is reserved,
+  // then given up once it has scrolled out of view. Everything below moves up
+  // while the capture is between frames.
+  const host = document.getElementById("host");
+  for (let block = 0; block < 12; block++) {
+    const rows = document.createElement("div");
+    buildRows(rows, 10, { start: block * 10 });
+    host.appendChild(rows);
+    const ad = document.createElement("div");
+    ad.className = "ad";
+    ad.textContent = "Ad slot";
+    host.appendChild(ad);
+  }
+  const watcher = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting && entry.boundingClientRect.bottom < 0) {
+        entry.target.classList.add("gone");
+        watcher.unobserve(entry.target);
+      }
+    }
+  });
+  document.querySelectorAll(".ad").forEach((ad) => watcher.observe(ad));
+</script>

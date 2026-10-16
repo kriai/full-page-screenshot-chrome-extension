@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture: a docs page that rewrites the URL hash while scrolling</title>
+<link rel="stylesheet" href="base.css">
+<div class="banner">Fixture: the address bar follows the section in view (#section-N), like react.dev</div>
+<div id="host"></div>
+<script src="rows.js"></script>
+<script>
+  const host = document.getElementById("host");
+  for (let s = 0; s < 6; s++) {
+    const section = document.createElement("section");
+    section.id = `section-${s + 1}`;
+    buildRows(section, 20, { start: s * 20 });
+    host.appendChild(section);
+  }
+  const spy = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) history.replaceState(null, "", `#${entry.target.id}`);
+    }
+  }, { rootMargin: "0px 0px -80% 0px" });
+  document.querySelectorAll("section").forEach((section) => spy.observe(section));
+</script>

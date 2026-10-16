@@ -221,6 +221,20 @@ async function decodeRowsInWorker(dataUrl) {
   return { width, height, runs };
 }
 
+// Override capture budgets for one test (background.js `BUDGET`, a global of
+// the service worker). Returns a function that puts the old values back.
+export async function setBudget(harness, patch) {
+  const previous = await harness.worker.evaluate((patch) => {
+    const old = {};
+    for (const [key, value] of Object.entries(patch)) {
+      old[key] = BUDGET[key];
+      BUDGET[key] = value;
+    }
+    return old;
+  }, patch);
+  return () => harness.worker.evaluate((old) => Object.assign(BUDGET, old), previous);
+}
+
 export async function decodeRows(harness, dataUrl) {
   return harness.worker.evaluate(decodeRowsInWorker, dataUrl);
 }

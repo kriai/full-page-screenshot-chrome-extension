@@ -1,0 +1,18 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture: a page that reloads itself partway down</title>
+<link rel="stylesheet" href="base.css">
+<div class="banner">Fixture: reloads once the capture scrolls past row 40 - the capture must stop, not stitch two pages</div>
+<div id="host"></div>
+<script src="rows.js"></script>
+<script>
+  buildRows(document.getElementById("host"), 120);
+  if (!sessionStorage.getItem("reloaded")) {
+    addEventListener("scroll", () => {
+      if (scrollY > 2400 && !sessionStorage.getItem("reloaded")) {
+        sessionStorage.setItem("reloaded", "1");
+        location.reload();
+      }
+    });
+  }
+</script>

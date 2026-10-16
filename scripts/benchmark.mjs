@@ -6,6 +6,7 @@
 //   npm run benchmark                         all sites in test/benchmark/sites.json
 //   npm run benchmark -- --only wikipedia-article,hacker-news
 //   npm run benchmark -- --dpr 2 --label after-fix
+//   npm run benchmark -- --parallel 6          sites at once (default 4)
 //   node scripts/benchmark.mjs --compare build/benchmark/a.json build/benchmark/b.json
 //
 // Real sites change daily: compare runs made on the same day, never against
@@ -15,13 +16,14 @@ import { join } from "node:path";
 import { capture, launch, REPO_ROOT } from "../test/e2e/harness.mjs";
 
 function parseArgs(argv) {
-  const out = { dpr: 1, label: "run", only: null, compare: null, images: true };
+  const out = { dpr: 1, label: "run", only: null, compare: null, images: true, parallel: 4 };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--dpr") out.dpr = Number(argv[++i]);
     else if (arg === "--label") out.label = argv[++i];
     else if (arg === "--only") out.only = new Set(argv[++i].split(","));
     else if (arg === "--no-images") out.images = false;
+    else if (arg === "--parallel") out.parallel = Math.max(1, Number(argv[++i]) || 1);
     else if (arg === "--compare") out.compare = [argv[++i], argv[++i]];
   }
   return out;
@@ -55,7 +57,41 @@ function summarise(result) {
   };
 }
 
-async function run({ dpr, label, only, images }) {
+async function captureSite(harness, site, { outDir, images }) {
+  const page = await harness.context.newPage();
+  try {
+    await page.goto(site.url, { waitUntil: "load", timeout: 45000 });
+    // Let first-paint scripts, fonts and consent banners arrive, the way a
+    // person would wait before reaching for the toolbar button.
+    await page.waitForTimeout(1500);
+    const result = await withTimeout(
+      capture(harness, page, {
+        diagnostics: true,
+        // Two panes scored alike: take the one in the middle of the window,
+        // as most people would.
+        pick: (p) => p.mouse.click(p.viewportSize().width / 2, p.viewportSize().height / 2),
+      }),
+      300000
+    );
+    const image = result.prestitched?.dataUrl || result.frameDataUrl;
+    if (images && image) {
+      writeFileSync(join(outDir, `${site.id}.png`), Buffer.from(image.split(",")[1], "base64"));
+    }
+    if (result.diagnostics) {
+      writeFileSync(join(outDir, `${site.id}.diagnostics.json`), JSON.stringify(result.diagnostics, null, 1));
+    }
+    return { id: site.id, url: site.url, ...summarise(result) };
+  } catch (err) {
+    return { id: site.id, url: site.url, error: `page: ${err.message.split("\n")[0]}` };
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+// Sites are captured side by side, each worker in a browser of its own:
+// Chrome's screenshot quota is per browser, and it is what a capture spends
+// most of its time waiting on.
+async function run({ dpr, label, only, images, parallel }) {
   const sites = JSON.parse(readFileSync(join(REPO_ROOT, "test/benchmark/sites.json"), "utf8")).filter(
     (site) => !only || only.has(site.id)
   );
@@ -63,46 +99,26 @@ async function run({ dpr, label, only, images }) {
   const outDir = join(REPO_ROOT, "build", "benchmark", `${stamp}-${label}`);
   mkdirSync(outDir, { recursive: true });
 
-  const harness = await launch({ deviceScaleFactor: dpr });
-  const results = [];
-  try {
-    for (const site of sites) {
-      process.stdout.write(`${site.id.padEnd(24)} `);
-      const page = await harness.context.newPage();
-      let row;
-      try {
-        await page.goto(site.url, { waitUntil: "load", timeout: 45000 });
-        // Let first-paint scripts, fonts and consent banners arrive, the way a
-        // person would wait before reaching for the toolbar button.
-        await page.waitForTimeout(1500);
-        const result = await withTimeout(
-          capture(harness, page, {
-            diagnostics: true,
-            // Two panes scored alike: take the one in the middle of the
-            // window, as most people would.
-            pick: (p) => p.mouse.click(p.viewportSize().width / 2, p.viewportSize().height / 2),
-          }),
-          300000
+  const results = new Array(sites.length);
+  let next = 0;
+  const worker = async () => {
+    const harness = await launch({ deviceScaleFactor: dpr });
+    try {
+      while (next < sites.length) {
+        const index = next++;
+        const row = await captureSite(harness, sites[index], { outDir, images });
+        results[index] = row;
+        console.log(
+          `${row.id.padEnd(24)} ${
+            row.error ? `error: ${row.error}` : `${row.frames} frames, ${Math.round(row.durationMs / 100) / 10}s`
+          }`
         );
-        row = { id: site.id, url: site.url, ...summarise(result) };
-        const image = result.prestitched?.dataUrl || result.frameDataUrl;
-        if (images && image) {
-          writeFileSync(join(outDir, `${site.id}.png`), Buffer.from(image.split(",")[1], "base64"));
-        }
-        if (result.diagnostics) {
-          writeFileSync(join(outDir, `${site.id}.diagnostics.json`), JSON.stringify(result.diagnostics, null, 1));
-        }
-      } catch (err) {
-        row = { id: site.id, url: site.url, error: `page: ${err.message.split("\n")[0]}` };
-      } finally {
-        await page.close().catch(() => {});
       }
-      results.push(row);
-      console.log(row.error ? `error: ${row.error}` : `${row.frames} frames, ${Math.round(row.durationMs / 100) / 10}s`);
+    } finally {
+      await harness.close();
     }
-  } finally {
-    await harness.close();
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(parallel, sites.length) }, worker));
 
   const report = { label, dpr, startedAt: stamp, results };
   const reportPath = join(outDir, "results.json");

@@ -1,0 +1,16 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture: an infinite feed</title>
+<link rel="stylesheet" href="base.css">
+<div class="banner">Fixture: a feed that loads another batch whenever the bottom comes near</div>
+<div id="host"></div>
+<script src="rows.js"></script>
+<script>
+  const host = document.getElementById("host");
+  let next = 0;
+  const batch = () => { buildRows(host, 40, { start: next, label: "post" }); next += 40; };
+  batch();
+  addEventListener("scroll", () => {
+    if (innerHeight + scrollY > document.body.scrollHeight - 600) batch();
+  });
+</script>

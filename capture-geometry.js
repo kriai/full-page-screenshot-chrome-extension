@@ -293,13 +293,34 @@
       this.trimEstimate = 0;   // how much the last frame lost to pinned elements
       this.unreachable = 0;    // strip a bottom-pinned bar keeps out of reach
       this.frameCount = 0;
+      this.lastScrollTop = 0;
+      this.lastBand = 0;
     }
 
     // Aim so the next frame starts on the last row we already have, minus the
     // overlap, and allow for the band the pinned elements will eat again.
+    //
+    // Always move forward by at least half the last band. When the band is
+    // thinner than the overlap plus what the pinned elements take, the aim
+    // lands at or behind the last position and the walk would re-take the
+    // same frame until a budget stopped it. Half a band is always safe: the
+    // next frame still starts inside rows already captured.
     nextTop(scrollRange) {
       if (this.frameCount === 0) return 0;
-      return clamp(this.covered - this.overlap - this.trimEstimate, 0, Math.max(0, scrollRange));
+      const aimed = this.covered - this.overlap - this.trimEstimate;
+      const least = this.lastScrollTop + Math.max(1, Math.floor(this.lastBand / 2));
+      return clamp(Math.max(aimed, least), 0, Math.max(0, scrollRange));
+    }
+
+    // Content above the viewport moved by `delta` px since the last frame (the
+    // page-side anchor measures it): lazy rows inserted push it down, ad slots
+    // collapsing pull it up. Rows already captured now sit at different page
+    // coordinates, and the walk steers in page coordinates, so it moves with
+    // them. Without this, a collapse larger than the overlap made the next
+    // frame start past rows nobody had captured.
+    shift(delta) {
+      if (!Number.isFinite(delta) || delta === 0 || this.frameCount === 0) return;
+      this.covered = Math.max(0, this.covered + delta);
     }
 
     // A pinned element that grew since the previous frame can push the frame's
@@ -313,6 +334,8 @@
 
     accept(measured) {
       this.frameCount++;
+      this.lastScrollTop = measured.scrollTop;
+      this.lastBand = measured.source.height;
       this.covered = Math.max(this.covered, measured.dest.top + measured.source.height);
       this.trimEstimate = measured.trimTop || 0;
       this.unreachable = Math.max(this.unreachable, measured.trimBottom || 0);
@@ -388,7 +411,12 @@
   // it, which means the capture is genuinely too big to deliver as one image.
   function fitOutputScale(width, height) {
     if (!(width > 0) || !(height > 0)) return 0;
-    const bySide = Math.min(MAX_CANVAS_SIDE / width, MAX_CANVAS_SIDE / height);
+    // A few pixels short of the limit: the stitcher rounds sizes up, and a
+    // factor that lands exactly on 32767 became a 32768px canvas, which
+    // Chrome refuses - failing the whole stitch on any page that needed
+    // shrinking.
+    const side = MAX_CANVAS_SIDE - 4;
+    const bySide = Math.min(side / width, side / height);
     const byPixels = Math.sqrt(MAX_CANVAS_PIXELS / (width * height));
     const fit = Math.min(1, bySide, byPixels);
     // Below this the result is too soft to be worth handing over as if it were

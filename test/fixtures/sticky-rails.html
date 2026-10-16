@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture: sticky sidebars beside the content</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  /* Docs-site layout: a sticky header, and sticky navigation columns on both
+     sides of the content that stay on screen while the page scrolls.
+     ?full=1 pins the left column from the very top of the viewport, under the
+     header, the way react.dev does - so it touches both the top and the
+     bottom of the window. */
+  header { position: sticky; top: 0; z-index: 10; height: 64px; background: #0f172a; color: #fff; padding: 20px 18px; font-weight: 700; }
+  .layout { display: grid; grid-template-columns: 280px 1fr 240px; align-items: start; }
+  .rail { position: sticky; top: 64px; height: calc(100vh - 64px); overflow-y: auto; background: #eef2f8; padding: 12px; }
+  .full .rail.left { top: 0; height: 100vh; padding-top: 76px; margin-top: -64px; }
+  .rail a { display: block; padding: 6px 4px; color: #1e3a8a; font-size: 14px; }
+</style>
+<header>Fixture: sticky header with sticky side columns</header>
+<div class="layout">
+  <nav class="rail left" id="left"></nav>
+  <main id="host"></main>
+  <aside class="rail right">On this page<br><br>Section one<br>Section two<br>Section three</aside>
+</div>
+<script src="rows.js"></script>
+<script>
+  if (new URLSearchParams(location.search).has("full")) document.querySelector(".layout").classList.add("full");
+  const left = document.getElementById("left");
+  for (let i = 1; i <= 120; i++) left.insertAdjacentHTML("beforeend", `<a href="#">Navigation link ${i}</a>`);
+  buildRows(document.getElementById("host"), 150);
+</script>
