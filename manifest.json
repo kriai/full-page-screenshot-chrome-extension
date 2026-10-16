@@ -27,6 +27,18 @@
       "128": "icons/icon128.png"
     }
   },
+  "commands": {
+    "capture-full-page": {
+      "suggested_key": { "default": "Alt+Shift+P" },
+      "description": "Capture the full page"
+    },
+    "capture-visible": {
+      "description": "Capture the visible area"
+    },
+    "capture-area": {
+      "description": "Select an area to capture"
+    }
+  },
   "background": {
     "service_worker": "background.js"
   }

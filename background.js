@@ -90,27 +90,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     sendResponse({ ok: true });
-    reportCaptureProgress({
-      percent: message.mode === "fullPage" ? 2 : 10,
-      label: message.mode === "fullPage" ? "Preparing full page" : "Preparing capture",
-      detail: "Inspecting the page",
-      count: "Starting",
-    });
-    try {
-      await capturePage(tab, message.mode, message.options || {});
-    } catch (err) {
-      if (err?.canceled) {
-        console.info("Screenshot capture canceled:", err.message);
-      } else {
-        console.error("Screenshot capture failed:", err);
-        setTemporaryErrorBadge(tab.id, FpsPageAccess.explainError(err));
-      }
-      postToCapturePopup({
-        type: "captureError",
-        error: err?.canceled ? err.message : FpsPageAccess.explainError(err),
-      });
-      if (!err?.concurrent) await cleanupCaptureTab(tab.id);
-    }
+    await runCapture(tab, message.mode, message.options || {});
   })().catch((err) => {
     console.error("Unable to start screenshot capture:", err);
     sendResponse({ ok: false, error: err.message || "Capture failed." });
@@ -118,6 +98,61 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   return true;
 });
+
+// One capture, started from the popup or a keyboard shortcut. Failures are
+// reported to the popup if it is open and on the toolbar badge either way.
+async function runCapture(tab, mode, options = {}) {
+  reportCaptureProgress({
+    percent: mode === "fullPage" ? 2 : 10,
+    label: mode === "fullPage" ? "Preparing full page" : "Preparing capture",
+    detail: "Inspecting the page",
+    count: "Starting",
+  });
+  try {
+    await capturePage(tab, mode, options);
+  } catch (err) {
+    if (err?.canceled) {
+      console.info("Screenshot capture canceled:", err.message);
+    } else {
+      console.error("Screenshot capture failed:", err);
+      setTemporaryErrorBadge(tab.id, FpsPageAccess.explainError(err));
+    }
+    postToCapturePopup({
+      type: "captureError",
+      error: err?.canceled ? err.message : FpsPageAccess.explainError(err),
+    });
+    if (!err?.concurrent) await cleanupCaptureTab(tab.id);
+  }
+}
+
+// Keyboard shortcuts (manifest `commands`; rebindable at
+// chrome://extensions/shortcuts). A shortcut grants activeTab just as the
+// toolbar button does, so no extra permission is needed.
+const COMMAND_MODES = {
+  "capture-full-page": "fullPage",
+  "capture-visible": "visible",
+  "capture-area": "selection",
+};
+chrome.commands.onCommand.addListener(async (command, commandTab) => {
+  const mode = COMMAND_MODES[command];
+  if (!mode) return;
+  const tab = commandTab?.id
+    ? commandTab
+    : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+  const access = await checkPageAccess(tab);
+  if (!access.ok) {
+    if (tab?.id) setTemporaryErrorBadge(tab.id, access.message);
+    return;
+  }
+  await runCapture(tab, mode, await captureOptionsFromSettings());
+});
+
+// Options the popup would otherwise pass along, read from saved settings for
+// captures started without it.
+async function captureOptionsFromSettings() {
+  const { settings = {} } = await chrome.storage.local.get("settings");
+  return settings.waitForContent ? { waitForContent: true } : {};
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

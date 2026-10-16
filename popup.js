@@ -137,6 +137,15 @@ buttons.forEach((button) => {
   });
 });
 
+// Show each mode's keyboard shortcut, if one is set, in its button's tooltip.
+chrome.commands.getAll().then((commands) => {
+  const modes = { "capture-full-page": "fullPage", "capture-visible": "visible", "capture-area": "selection" };
+  for (const command of commands) {
+    const button = buttons.find((b) => b.dataset.mode === modes[command.name]);
+    if (button && command.shortcut) button.title = `${button.title} (${command.shortcut})`;
+  }
+});
+
 document.getElementById("history").addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const options = { url: chrome.runtime.getURL("history.html") };
