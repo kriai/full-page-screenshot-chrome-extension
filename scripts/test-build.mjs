@@ -15,7 +15,9 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const TEST_EXTENSION_DIR = join(root, "build", "test-extension");
 
-export function buildTestExtension() {
+// `dir`, `hostAccess` and `name` let the dev browser build a hand-testing copy
+// that behaves like the shipped extension (activeTab only).
+export function buildTestExtension({ dir = TEST_EXTENSION_DIR, hostAccess = true, name = "test build" } = {}) {
   const files = execFileSync(join(root, "scripts", "package.sh"), ["--list-worktree"], {
     cwd: root,
     encoding: "utf8",
@@ -25,19 +27,21 @@ export function buildTestExtension() {
     // A tracked file deleted in the working tree is still listed by git.
     .filter((file) => existsSync(join(root, file)));
 
-  rmSync(TEST_EXTENSION_DIR, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true });
   for (const file of files) {
-    const to = join(TEST_EXTENSION_DIR, file);
+    const to = join(dir, file);
     mkdirSync(dirname(to), { recursive: true });
     cpSync(join(root, file), to);
   }
 
-  const manifestPath = join(TEST_EXTENSION_DIR, "manifest.json");
+  const manifestPath = join(dir, "manifest.json");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  manifest.host_permissions = [...new Set([...(manifest.host_permissions || []), "<all_urls>"])];
-  manifest.name = `${manifest.name} (test build)`;
+  if (hostAccess) {
+    manifest.host_permissions = [...new Set([...(manifest.host_permissions || []), "<all_urls>"])];
+  }
+  manifest.name = `${manifest.name} (${name})`;
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  return { dir: TEST_EXTENSION_DIR, files: files.length };
+  return { dir: dir, files: files.length };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
