@@ -32,7 +32,7 @@ after(async () => {
 
 async function captureFixture(
   name,
-  { deviceScaleFactor = 1, viewport, mode = "fullPage", pick, query = "", budget } = {}
+  { deviceScaleFactor = 1, viewport, mode = "fullPage", pick, query = "", budget, options = {} } = {}
 ) {
   const harness = await launch({ deviceScaleFactor, viewport });
   try {
@@ -40,7 +40,7 @@ async function captureFixture(
     const page = await harness.context.newPage();
     await page.goto(`${server.origin}/test/fixtures/${name}.html${query}`);
     await page.waitForLoadState("load");
-    const result = await capture(harness, page, { mode, pick, diagnostics: true });
+    const result = await capture(harness, page, { mode, pick, options, diagnostics: true });
     assert.equal(result.error, null, `capture failed: ${result.error}`);
     assert.ok(result.hasImage, "the capture produced no image");
     const decoded = await decodeRows(harness);
@@ -119,6 +119,14 @@ describe("capture", { concurrency: CONCURRENCY }, () => {
       }
     });
   }
+
+  // "Wait for slow content": rows arrive 1.5s after their section scrolls
+  // into view, behind a skeleton the same height, so nothing in the layout
+  // says to wait. Only the network tracker does.
+  it("full page: slow-network with wait for slow content", { timeout: TIMEOUT }, async () => {
+    const captured = await captureFixture("slow-network", { options: { waitForContent: true } });
+    assertFullPage(captured, { expected: range(0, 120) });
+  });
 
   it("full page: two-panes, picking the left pane", { timeout: TIMEOUT }, async () => {
     const captured = await captureFixture("two-panes", {

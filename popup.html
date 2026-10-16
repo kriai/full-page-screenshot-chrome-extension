@@ -104,6 +104,20 @@
       background: var(--shelf-divider);
       transform: translateX(-0.5px);
     }
+    .option-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 8px 2px 0;
+      font-size: 12px;
+      color: inherit;
+      opacity: 0.8;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .option-row input { margin: 0; }
+
     .shelf-action {
       position: relative;
       z-index: 1;
@@ -312,6 +326,11 @@
       </span>
       <span>Full page screenshot</span>
     </button>
+
+    <label class="option-row" title="Waits for images and data still loading before each section. Slower, for pages that fill in late.">
+      <input type="checkbox" id="waitForContent">
+      <span>Wait for slow content</span>
+    </label>
 
     <div class="capture-shelf">
       <button class="shelf-action" data-mode="selection" title="Select a region to capture">

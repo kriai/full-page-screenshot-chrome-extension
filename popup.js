@@ -127,13 +127,26 @@ async function startCapture(mode, options = {}) {
   if (mode === "selection" || options.pickTarget) window.close();
 }
 
+// Remembered between captures, and read by keyboard-shortcut captures too.
+const waitForContent = document.getElementById("waitForContent");
+chrome.storage.local.get("settings").then(({ settings = {} }) => {
+  waitForContent.checked = !!settings.waitForContent;
+});
+waitForContent.addEventListener("change", async () => {
+  const { settings = {} } = await chrome.storage.local.get("settings");
+  await chrome.storage.local.set({ settings: { ...settings, waitForContent: waitForContent.checked } });
+});
+
 buttons.forEach((button) => {
   button.addEventListener("click", (event) => {
     // Alt/Shift-click forces the scroll-area picker when the automatic choice
     // is wrong (pages with several independently scrolling panes).
-    const pickTarget =
-      button.dataset.mode === "fullPage" && (event.altKey || event.shiftKey);
-    startCapture(button.dataset.mode, { pickTarget });
+    const fullPage = button.dataset.mode === "fullPage";
+    const pickTarget = fullPage && (event.altKey || event.shiftKey);
+    startCapture(button.dataset.mode, {
+      pickTarget,
+      waitForContent: fullPage && waitForContent.checked,
+    });
   });
 });
 

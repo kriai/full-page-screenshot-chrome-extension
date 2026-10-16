@@ -224,8 +224,8 @@
   // How many images are on or near the screen and still loading. An image with
   // no src at all counts too: that is a lazy placeholder whose loader has not
   // run yet, and photographing it gets a grey box.
-  function fpsPendingImages() {
-    const vh = window.innerHeight;
+  function fpsPendingImages(reach = 1) {
+    const vh = window.innerHeight * reach;
     let pending = 0;
     const images = document.images;
     for (let i = 0; i < images.length; i++) {
@@ -268,12 +268,19 @@
     // painting, and holding each one open for the worst case is what makes a
     // long capture feel slow. The long budget is only spent while images are
     // actually still arriving.
+    // "Wait for slow content": longer budgets, images just below the window
+    // count too, and requests still in flight (counted by the network tracker
+    // the worker installs in the page) hold the frame open.
+    const patient = !!request.patient;
     const budget = request.timeoutMs || 400;
-    const patientBudget = request.patientMs || 1800;
+    const patientBudget = patient ? 25000 : request.patientMs || 1800;
     const minWait = request.minWaitMs || 60;
+    const reach = patient ? 1.5 : 1;
+    const networkBusy = () =>
+      patient && request.netTrusted && Number(document.documentElement.getAttribute("data-fps-net") || 0) > 0;
     // An image count that has not moved in this long is an image that is not
     // coming; stop waiting on it rather than spending the whole budget.
-    const stallMs = request.stallMs || 900;
+    const stallMs = patient ? 8000 : request.stallMs || 900;
 
     // Newly mounted media is worth one extra beat even when the layout
     // fingerprint has settled, because the image inside has yet to load.
@@ -301,14 +308,14 @@
     let previous = fpsLayoutSignature(el);
     let stableSince = Date.now();
     let pendingSince = Date.now();
-    let lastPending = fpsPendingImages();
+    let lastPending = fpsPendingImages(reach);
     let seenMounted = mounted;
 
     try {
       for (;;) {
         const now = Date.now();
-        // Only a frame with images still loading earns the longer wait.
-        const limit = lastPending > 0 ? patientBudget : budget;
+        // Only a frame with something still loading earns the longer wait.
+        const limit = lastPending > 0 || networkBusy() ? patientBudget : budget;
         if (now - startedAt >= limit) break;
         await new Promise((resolve) => setTimeout(resolve, 25));
 
@@ -322,14 +329,15 @@
           stableSince = Date.now();
         }
 
-        const pending = fpsPendingImages();
+        const pending = fpsPendingImages(reach);
         if (pending !== lastPending) {
           lastPending = pending;
           pendingSince = Date.now();
         }
 
-        const settled = Date.now() - stableSince >= 80;
+        const settled = Date.now() - stableSince >= (patient ? 250 : 80);
         const imagesDone = pending === 0 || Date.now() - pendingSince > stallMs;
+        if (networkBusy()) stableSince = Date.now();
         if (Date.now() - startedAt >= minWait && settled && imagesDone) break;
       }
     } finally {
@@ -347,6 +355,27 @@
     ]);
 
     return { settleMs: Date.now() - startedAt, pending: fpsPendingImages(), mounted };
+  }
+
+  // Wait for the page's requests to finish, as counted by the network tracker
+  // the worker installs for "Wait for slow content". True once the count has
+  // stayed at zero briefly; false if it never got there in time - a page with
+  // a permanent connection, whose count cannot be trusted.
+  async function fpsNetworkSettles(request) {
+    const timeoutMs = request?.timeoutMs || 1200;
+    const count = () => Number(document.documentElement.getAttribute("data-fps-net") || 0);
+    const startedAt = Date.now();
+    let quietSince = count() === 0 ? Date.now() : 0;
+    while (Date.now() - startedAt < timeoutMs) {
+      if (count() === 0) {
+        if (!quietSince) quietSince = Date.now();
+        if (Date.now() - quietSince >= 250) return true;
+      } else {
+        quietSince = 0;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return false;
   }
 
   // Scroll extent only - no occlusion pass, no anchor, no style writes. Used
@@ -1289,6 +1318,7 @@
     scrollAndSettle: fpsScrollAndSettle,
     scrollTop: fpsScrollTop,
     metrics: fpsMetrics,
+    networkSettles: fpsNetworkSettles,
     freeze: fpsFreeze,
     thaw: fpsThaw,
     settleTop: fpsSettleTop,

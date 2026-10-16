@@ -1101,6 +1101,64 @@ async function measureOrCancel(tabId, session, request) {
   return measured;
 }
 
+// "Wait for slow content": count the page's fetch and XMLHttpRequest calls in
+// flight, published on <html data-fps-net>. It has to run in the page's own
+// world to see them; uninstalling puts the originals back. Requests older
+// than 20s stop counting (long polls, beacons). Requests already running when
+// it is installed, WebSockets and plain image loads are not seen - images are
+// covered by the page engine's own checks.
+function fpsNetTracker(action) {
+  const w = window;
+  const html = document.documentElement;
+  if (action === "uninstall") {
+    const saved = w.__fpsNet;
+    if (!saved) return;
+    w.fetch = saved.fetch;
+    XMLHttpRequest.prototype.send = saved.send;
+    clearInterval(saved.timer);
+    delete w.__fpsNet;
+    html.removeAttribute("data-fps-net");
+    return;
+  }
+  if (w.__fpsNet) return;
+  const inflight = new Map();
+  let next = 0;
+  const publish = () => {
+    const now = Date.now();
+    for (const [id, at] of inflight) if (now - at > 20000) inflight.delete(id);
+    html.setAttribute("data-fps-net", String(inflight.size));
+  };
+  const begin = () => {
+    const id = ++next;
+    inflight.set(id, Date.now());
+    publish();
+    return id;
+  };
+  const end = (id) => {
+    inflight.delete(id);
+    publish();
+  };
+  const fetch = w.fetch;
+  const send = XMLHttpRequest.prototype.send;
+  w.fetch = function (...args) {
+    const id = begin();
+    const pending = fetch.apply(this, args);
+    pending.then(() => end(id), () => end(id));
+    return pending;
+  };
+  XMLHttpRequest.prototype.send = function (...args) {
+    const id = begin();
+    this.addEventListener("loadend", () => end(id), { once: true });
+    return send.apply(this, args);
+  };
+  w.__fpsNet = { fetch, send, timer: setInterval(publish, 1000) };
+  publish();
+}
+
+async function setNetTracker(tabId, action) {
+  await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: fpsNetTracker, args: [action] });
+}
+
 async function injectPageEngine(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId },
@@ -1143,6 +1201,7 @@ async function captureFullPage(tab, options = {}) {
   }
 
   let restoreState = {};
+  let trackerInstalled = false;
   try {
     reportCaptureProgress({
       percent: 3,
@@ -1193,6 +1252,15 @@ async function captureFullPage(tab, options = {}) {
       keepOverlays: !!options.keepOverlays,
     });
     target = { ...target, frozen: frozen || null };
+
+    if (options.waitForContent) {
+      await setNetTracker(tabId, "install");
+      trackerInstalled = true;
+      // A page that never goes quiet (a live connection, a polling widget)
+      // would make every frame wait out its full budget; ignore the count.
+      const netTrusted = !!(await callPage(tabId, "networkSettles", { timeoutMs: 1200 }));
+      target = { ...target, patient: true, netTrusted };
+    }
 
     // Threads that page in older content have to finish doing that before the
     // first frame, or everything captured afterwards is offset.
@@ -1271,6 +1339,7 @@ async function captureFullPage(tab, options = {}) {
       count: `${result.frames.length} section${result.frames.length === 1 ? "" : "s"}`,
     });
   } finally {
+    if (trackerInstalled) await setNetTracker(tabId, "uninstall").catch(() => {});
     await callPage(tabId, "restore", restoreState).catch((err) =>
       console.warn("Unable to restore page after capture:", err)
     );
@@ -1328,6 +1397,7 @@ async function runCaptureLoop(tab, session, target) {
   let seamRetries = 0;
   let growthChecks = 0;
   let grewDuringRun = false;
+  let patientBottomWaited = false;
   let driftRejections = 0;
   let lastDestTop = -1;
   let shell = null;
@@ -1392,7 +1462,12 @@ async function runCaptureLoop(tab, session, target) {
       });
 
       const requestedTop = walk.nextTop(scrollRange);
-      const settle = await callPage(tabId, "scrollAndSettle", { top: requestedTop, timeoutMs: 1500 });
+      const settle = await callPage(tabId, "scrollAndSettle", {
+        top: requestedTop,
+        timeoutMs: 1500,
+        patient: !!target.patient,
+        netTrusted: !!target.netTrusted,
+      });
       // The frame that lands at the very bottom is where bottom-pinned page
       // furniture belongs, so the page side is told which one that is.
       const isLast = requestedTop >= scrollRange - 1;
@@ -1612,6 +1687,28 @@ async function runCaptureLoop(tab, session, target) {
       // page that has actually been growing as it was captured. Doing it
       // everywhere adds a second and a half to every ordinary capture for a
       // result that never changes.
+      // With "Wait for slow content" the bottom is held until the page's
+      // requests finish (up to 15s), whether or not it has grown so far: the
+      // next batch of a feed is often still on its way.
+      if (atBottom && target.patient && !patientBottomWaited) {
+        patientBottomWaited = true;
+        reportCaptureProgress({
+          percent: 8 + 86 * Math.min(1, covered / Math.max(1, contentHeight)),
+          label: "Capturing full page",
+          detail: "Waiting for content to load",
+          count: `${index + 1} of about ${Math.max(estimatedTotal, index + 1)}`,
+        });
+        if (target.netTrusted) await callPage(tabId, "networkSettles", { timeoutMs: 15000 });
+        await sleep(GROWTH_WAIT_MS);
+        const grown = await callPage(tabId, "metrics").catch(() => null);
+        if (grown && grown.scrollRange > scrollRange + 8) {
+          scrollRange = grown.scrollRange;
+          contentHeight = Math.max(contentHeight, grown.contentHeight);
+          diagnostics?.push({ event: "growth", index, scrollRange, contentHeight, waited: true });
+          previousScrollTop = measured.scrollTop;
+          continue;
+        }
+      }
       if (atBottom && grewDuringRun && growthChecks < MAX_GROWTH_CHECKS) {
         await sleep(GROWTH_WAIT_MS);
         growthChecks++;

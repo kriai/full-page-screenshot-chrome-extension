@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture: sections that load their rows over a slow network</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  .skeleton { height: 600px; background: repeating-linear-gradient(0deg, #e5e7eb, #e5e7eb 58px, #f3f4f6 58px, #f3f4f6 60px); }
+</style>
+<div class="banner">Fixture: each section fetches its rows when it scrolls into view, and the server takes 1.5s to answer</div>
+<div id="host"></div>
+<script src="rows.js"></script>
+<script>
+  // A single-page app's feed: a grey skeleton holds the place until the data
+  // arrives. The layout does not move when it does, so only a capture that
+  // watches the network knows to wait. Needs the test server's ?delay=.
+  const host = document.getElementById("host");
+  for (let s = 0; s < 12; s++) {
+    const section = document.createElement("div");
+    section.className = "skeleton";
+    section.dataset.start = String(s * 10);
+    host.appendChild(section);
+  }
+  const loader = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const section = entry.target;
+      loader.unobserve(section);
+      fetch(`base.css?delay=1500&s=${section.dataset.start}`).then(() => {
+        section.className = "";
+        buildRows(section, 10, { start: Number(section.dataset.start) });
+      });
+    }
+  });
+  document.querySelectorAll(".skeleton").forEach((section) => loader.observe(section));
+</script>

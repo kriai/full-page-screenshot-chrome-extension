@@ -23,10 +23,14 @@ const MIME = {
 };
 
 // Serves the repo root, so fixtures load the same way they do when served by
-// hand with `python3 -m http.server`.
+// hand with `python3 -m http.server`. `?delay=<ms>` holds a response back, for
+// fixtures that imitate a slow network.
 export async function startServer(root = REPO_ROOT) {
-  const server = createServer((req, res) => {
-    const path = normalize(decodeURIComponent(new URL(req.url, "http://x").pathname));
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url, "http://x");
+    const delay = Number(url.searchParams.get("delay")) || 0;
+    if (delay) await new Promise((resolve) => setTimeout(resolve, Math.min(delay, 10000)));
+    const path = normalize(decodeURIComponent(url.pathname));
     const file = join(root, path);
     if (!file.startsWith(root)) {
       res.writeHead(403).end();
