@@ -902,6 +902,7 @@
     const toHide = [];
     const hide = (node) => toHide.push(node);
     const toUnpin = [];
+    const stackCandidates = [];
 
     let trimTop = 0;
     let trimBottom = 0;
@@ -1001,10 +1002,29 @@
         continue;
       }
 
-      // Floating mid-band: trimming cannot help, so a fixed widget is hidden
-      // and a sticky one is reported as blocking part of the frame.
-      if (fixed) hide(node);
-      else blockedMiddle = true;
+      // Floating mid-band: trimming cannot help, so a fixed widget is hidden.
+      if (fixed) {
+        hide(node);
+        continue;
+      }
+      // A sticky bar near the top or bottom that does not quite touch the
+      // edge is usually stacked against other furniture: a sub-navigation bar
+      // pinned under a header. Judged alone it is "mid-band" and the rows
+      // under it are lost, so it extends the trim instead. Decided after the
+      // loop, once the header and footer trims are known.
+      stackCandidates.push(box);
+    }
+
+    const bandHeight = bandBottom - bandTop;
+    for (const box of stackCandidates) {
+      const wide = Math.min(box.right, bandRight) - Math.max(box.left, bandLeft) >= (bandRight - bandLeft) * 0.5;
+      if (wide && box.top <= bandTop + Math.max(trimTop, bandHeight * 0.35)) {
+        trimTop = Math.max(trimTop, box.bottom - bandTop);
+      } else if (wide && box.bottom >= bandBottom - Math.max(trimBottom, bandHeight * 0.35)) {
+        trimBottom = Math.max(trimBottom, bandBottom - box.top);
+      } else {
+        blockedMiddle = true;
+      }
     }
 
     for (const rail of toUnpin) {

@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Fixture: a header that slides in as you scroll up, with a bar pinned under it</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  /* News sites (The Verge): the masthead slides out as the page scrolls down
+     and back in, pixel for pixel, as it scrolls up. A section bar sits pinned
+     directly under it, following its edge. */
+  .masthead { position: sticky; top: 0; z-index: 20; height: 160px; background: #111827; color: #fff; padding: 24px 18px; font-weight: 700; }
+  .section-bar { position: sticky; z-index: 10; height: 120px; background: #1d4ed8; color: #fff; padding: 14px 18px; font-weight: 700; }
+</style>
+<header class="masthead" id="masthead">Masthead - slides with the scroll direction</header>
+<div id="before"></div>
+<div class="section-bar" id="bar">Section bar - pinned under the masthead</div>
+<div id="after"></div>
+<script src="rows.js"></script>
+<script>
+  buildRows(document.getElementById("before"), 40);
+  buildRows(document.getElementById("after"), 80, { start: 40 });
+  const masthead = document.getElementById("masthead");
+  const bar = document.getElementById("bar");
+  let shown = 160;
+  let lastY = scrollY;
+  const place = () => {
+    masthead.style.transform = `translateY(${shown - 160}px)`;
+    bar.style.top = `${shown}px`;
+  };
+  addEventListener("scroll", () => {
+    shown = Math.max(0, Math.min(160, shown - (scrollY - lastY)));
+    lastY = scrollY;
+    place();
+  });
+  place();
+</script>

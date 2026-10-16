@@ -102,6 +102,11 @@ const fullPageCases = [
   // Docs page whose address bar follows the section in view. Changing only
   // the hash is not navigation; it used to cancel the capture.
   { name: "scrollspy", expected: range(0, 120) },
+  // News site (The Verge): a masthead that slides back in as the page scrolls
+  // up, with a section bar pinned under it. Scrolling back to recover rows
+  // grows the masthead by the same distance, and the bar does not touch the
+  // top of the window, yet both belong to the header.
+  { name: "reveal-header", expected: range(0, 120) },
 ];
 
 describe("capture", { concurrency: CONCURRENCY }, () => {

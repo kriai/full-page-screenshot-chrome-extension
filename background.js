@@ -1362,15 +1362,24 @@ async function runCaptureLoop(tab, session, target) {
 
       // If a pinned element grew and opened a gap, drop back by the shortfall
       // once rather than losing rows.
-      const shortfall = walk.repairShortfall(measured);
-      if (shortfall) {
+      //
+      // Scrolling back can itself move the furniture: a header that slides in
+      // as the page scrolls up (The Verge) grows the trim by the distance
+      // scrolled, so the frame still starts where it did. Each further step
+      // goes back twice as far, up to three steps.
+      let shortfall = walk.repairShortfall(measured);
+      let repaired = 0;
+      for (let attempt = 0; shortfall && attempt < 3; attempt++) {
+        const back = shortfall * 2 ** attempt;
+        repaired += back;
         await callPage(tabId, "scrollAndSettle", {
-          top: Math.max(0, measured.scrollTop - shortfall),
+          top: Math.max(0, measured.scrollTop - back),
           timeoutMs: 900,
         });
         measured = await measureOrCancel(tabId, session, { isFirst: false, isLast });
         driftPx += measured.drift || 0;
         walk.shift(measured.drift || 0);
+        shortfall = walk.repairShortfall(measured);
       }
 
       // The first frame reveals what this page actually does. Pinned
@@ -1511,7 +1520,7 @@ async function runCaptureLoop(tab, session, target) {
         index,
         requestedTop,
         scrollTop: measured.scrollTop,
-        repaired: shortfall,
+        repaired,
         source: measured.source,
         destTop,
         reportedTop: measured.dest.top,
