@@ -41,7 +41,14 @@ async function showThumbnail(img, entry) {
 }
 
 async function downloadEntry(entry) {
-  const blob = await FpsImages.get(entry.imageKey);
+  // A capture saved in parts downloads as one full-resolution PNG, with each
+  // part's annotations where it has any.
+  const blob = entry.parts?.length > 1
+    ? await FpsExport.stackToPng(
+        await Promise.all(entry.parts.map((part) => FpsImages.get(part.outKey || part.imageKey))),
+        Math.max(...entry.parts.map((part) => part.width))
+      )
+    : await FpsImages.get(entry.imageKey);
   if (!blob) throw new Error("The saved image is missing.");
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -113,6 +120,7 @@ async function openInEditor(entry) {
     historyId: entry.id || "",
     imageKey: entry.imageKey,
     baseKey,
+    ...(entry.parts?.length > 1 ? { parts: entry.parts } : {}),
     prestitched: true,
     prestitchedReport: {
       height: project?.baseHeight || entry.height,
@@ -249,7 +257,7 @@ function render(history) {
 
     const mode = document.createElement("span");
     mode.className = "pill";
-    mode.textContent = inferMode(entry);
+    mode.textContent = entry.parts?.length > 1 ? `${inferMode(entry)} · ${entry.parts.length} parts` : inferMode(entry);
 
     const domain = document.createElement("span");
     domain.className = "domain";

@@ -147,7 +147,12 @@
 
   // Every image key a history entry owns.
   function entryKeys(entry) {
-    return [entry?.imageKey, entry?.baseKey, entry?.thumbKey].filter(Boolean);
+    return [
+      entry?.imageKey,
+      entry?.baseKey,
+      entry?.thumbKey,
+      ...(entry?.parts || []).flatMap((part) => [part.imageKey, part.outKey]),
+    ].filter(Boolean);
   }
 
   // One-time move of history saved by earlier versions. Each entry could hold
@@ -207,6 +212,7 @@
     if (capture) {
       for (const key of [capture.imageKey, capture.baseKey]) if (key) live.add(key);
       for (const frame of capture.frames || []) if (frame.key) live.add(frame.key);
+      for (const part of capture.parts || []) if (part.imageKey) live.add(part.imageKey);
     }
     const now = Date.now();
     const stale = (await list())

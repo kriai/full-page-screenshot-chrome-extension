@@ -94,9 +94,11 @@ function installRecorder() {
     // The finished image, held here because the editor deletes handed-over
     // frames once it has loaded them. Single-viewport modes hand over one raw
     // frame instead of a stitch.
-    globalThis.__e2eImage =
-      capture.prestitched?.blob ||
-      (capture.frames?.length === 1 ? await FpsImages.get(capture.frames[0].key) : null);
+    // A capture saved in parts is held as the list of part images.
+    globalThis.__e2eImage = capture.prestitched?.parts
+      ? await Promise.all(capture.prestitched.parts.map((part) => FpsImages.get(part.key)))
+      : capture.prestitched?.blob ||
+        (capture.frames?.length === 1 ? await FpsImages.get(capture.frames[0].key) : null);
     globalThis.__e2eLast = {
       mode: capture.mode,
       frames: capture.frames?.length || 0,
@@ -106,6 +108,7 @@ function installRecorder() {
       prestitched: capture.prestitched
         ? {
             width: capture.prestitched.width,
+            parts: capture.prestitched.parts?.length || 0,
             height: capture.prestitched.height,
             downscaled: capture.prestitched.downscaled,
             gaps: capture.prestitched.gaps,
@@ -185,8 +188,27 @@ export async function waitForEditor(harness) {
 // Runs inside the service worker: decode the last capture's image and return
 // the row code under every image row, run-length encoded.
 async function decodeRowsInWorker() {
-  const blob = globalThis.__e2eImage;
-  if (!blob) return { width: 0, height: 0, runs: [] };
+  const image = globalThis.__e2eImage;
+  if (!image) return { width: 0, height: 0, runs: [] };
+  // Parts are read one after another as if stacked into one image.
+  const blobs = Array.isArray(image) ? image : [image];
+  const runs = [];
+  let offset = 0;
+  let width = 0;
+  for (const blob of blobs) {
+    const decoded = await decodeOne(blob, offset);
+    width = Math.max(width, decoded.width);
+    for (const run of decoded.runs) {
+      const prev = runs[runs.length - 1];
+      if (prev && prev.index === run.index && prev.bottom === run.top) prev.bottom = run.bottom;
+      else runs.push(run);
+    }
+    offset += decoded.height;
+  }
+  return { width, height: offset, runs };
+}
+
+async function decodeOne(blob, offset) {
   const bitmap = await createImageBitmap(blob);
   const { width, height } = bitmap;
   const canvas = new OffscreenCanvas(width, height);
@@ -243,7 +265,7 @@ async function decodeRowsInWorker() {
           }
         }
       }
-      const y = top + r;
+      const y = offset + top + r;
       const prev = runs[runs.length - 1];
       if (index < 0) continue;
       if (prev && prev.index === index && prev.bottom === y) prev.bottom = y + 1;
@@ -268,13 +290,15 @@ export async function setBudget(harness, patch) {
 }
 
 export async function decodeRows(harness) {
-  return harness.worker.evaluate(decodeRowsInWorker);
+  // Both functions are sent as source, so one can call the other.
+  return harness.worker.evaluate(`(() => { ${decodeOne}; ${decodeRowsInWorker}; return decodeRowsInWorker(); })()`);
 }
 
 // The last capture's image as base64 PNG, for saving to disk.
 export async function lastImageBase64(harness) {
   return harness.worker.evaluate(async () => {
-    const blob = globalThis.__e2eImage;
+    const image = globalThis.__e2eImage;
+    const blob = Array.isArray(image) ? image[0] : image;
     if (!blob) return null;
     const bytes = new Uint8Array(await blob.arrayBuffer());
     let binary = "";

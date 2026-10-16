@@ -10,7 +10,7 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { availableParallelism } from "node:os";
-import { capture, decodeRows, launch, range, setBudget, startServer, verifyRows } from "./harness.mjs";
+import { capture, decodeRows, launch, range, setBudget, startServer, verifyRows, waitForEditor } from "./harness.mjs";
 
 // A fixture row is 60px with a 1px border, so its code is 59 CSS px tall.
 const ROW = 59;
@@ -32,15 +32,16 @@ after(async () => {
 
 async function captureFixture(
   name,
-  { deviceScaleFactor = 1, viewport, mode = "fullPage", pick, query = "", budget, options = {} } = {}
+  { deviceScaleFactor = 1, viewport, mode = "fullPage", pick, query = "", budget, options = {}, settings, inspect } = {}
 ) {
   const harness = await launch({ deviceScaleFactor, viewport });
   try {
     if (budget) await setBudget(harness, budget);
+    if (settings) await harness.worker.evaluate((settings) => chrome.storage.local.set({ settings }), settings);
     const page = await harness.context.newPage();
     await page.goto(`${server.origin}/test/fixtures/${name}.html${query}`);
     await page.waitForLoadState("load");
-    const result = await capture(harness, page, { mode, pick, options, diagnostics: true });
+    const result = await capture(harness, page, { mode, pick, options, diagnostics: true, keepEditor: !!inspect });
     assert.equal(result.error, null, `capture failed: ${result.error}`);
     assert.ok(result.hasImage, "the capture produced no image");
     const decoded = await decodeRows(harness);
@@ -48,7 +49,9 @@ async function captureFixture(
       leftovers: document.querySelectorAll("[data-fps-ui], [data-fps-prev-visibility]").length,
       scrollY: window.scrollY,
     }));
-    return { result, decoded, restored };
+    // Anything the test wants to check in the editor, while the browser is open.
+    const inspected = inspect ? await inspect(harness) : null;
+    return { result, decoded, restored, inspected };
   } finally {
     await harness.close();
   }
@@ -171,15 +174,57 @@ describe("capture", { concurrency: CONCURRENCY }, () => {
     assertPrefix(captured, 120);
   });
 
-  // An endless feed runs into the frame cap past canvas size, so the stitch
-  // has to be shrunk to fit. That path once failed on a one-pixel rounding
-  // error and left the capture without an image. A tall window gets there in
-  // 20 frames instead of 80. The shrunken row codes are too small to read,
-  // so only the result is checked.
-  it("full page: infinite-feed is shrunk to fit, not lost", { timeout: TIMEOUT }, async () => {
+  // Past canvas size, by default: saved in parts at full resolution, cut
+  // between frames, so every row is still there exactly once across them. A
+  // tall window gets past 32,767px in about 25 frames.
+  it("full page: very-tall past canvas size is saved in parts", { timeout: TIMEOUT }, async () => {
+    const captured = await captureFixture("very-tall", {
+      viewport: { width: 1280, height: 2000 },
+      budget: { maxContentHeight: 45000 },
+    });
+    assert.ok(captured.result.prestitched?.parts >= 2, "expected the capture in parts");
+    assert.equal(captured.result.prestitched.downscaled, 0);
+    assertPrefix(captured, 700);
+  });
+
+  // The editor on a split capture: move between parts, and download the
+  // whole page as one PNG written row by row past any canvas limit.
+  it("editor: parts can be switched and downloaded as one PNG", { timeout: TIMEOUT }, async () => {
+    const { result, inspected } = await captureFixture("very-tall", {
+      viewport: { width: 1280, height: 2000 },
+      budget: { maxContentHeight: 45000 },
+      inspect: async (harness) => {
+        const editor = await waitForEditor(harness);
+        const first = await editor.textContent("#partLabel");
+        await editor.click("#partNext");
+        await editor.waitForFunction(() => document.getElementById("partLabel").textContent.startsWith("Part 2"));
+        const [download] = await Promise.all([editor.waitForEvent("download"), editor.click("#downloadAll")]);
+        const png = await new Promise((resolve, reject) => {
+          download.createReadStream().then((stream) => {
+            const chunks = [];
+            stream.on("data", (chunk) => chunks.push(chunk));
+            stream.on("end", () => resolve(Buffer.concat(chunks)));
+            stream.on("error", reject);
+          }, reject);
+        });
+        return { first, height: png.readUInt32BE(20), signature: png.toString("ascii", 1, 4) };
+      },
+    });
+    assert.match(inspected.first, /^Part 1 of \d/);
+    assert.equal(inspected.signature, "PNG");
+    assert.equal(inspected.height, result.prestitched.height, "the stacked PNG is not the full height");
+    assert.ok(inspected.height > 32767, "the stacked PNG should be taller than any canvas");
+  });
+
+  // The same endless feed with "shrink to one image" chosen instead: the
+  // stitch is scaled to fit. That path once failed on a one-pixel rounding
+  // error and left the capture without an image. The shrunken row codes are
+  // too small to read, so only the result is checked.
+  it("full page: infinite-feed is shrunk to fit when asked, not lost", { timeout: TIMEOUT }, async () => {
     const { result } = await captureFixture("infinite-feed", {
       viewport: { width: 1280, height: 2000 },
       budget: { maxFrames: 20 },
+      settings: { longPages: "shrink" },
     });
     assert.equal(result.truncated?.reason, "frames");
     assert.ok(result.prestitched, "the worker stitcher failed and the viewer fallback was used");

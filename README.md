@@ -28,7 +28,19 @@ export controls.
 - Move and resize existing annotations by clicking them directly.
 - Add numbered step markers for walkthroughs and bug reports.
 - Add a presentation canvas with background, padding, rounded corners, shadow,
-  and aspect-ratio controls for polished exports.
+  and aspect-ratio controls for polished exports, plus an optional browser
+  frame (macOS or Windows, light or dark, with the page address) and a date
+  or timestamp stamp. "Use as default" keeps the presentation for new
+  screenshots; annotation colour, stroke, text size and JPEG quality are
+  remembered.
+- Pages too tall for one image are saved in parts at full resolution, each
+  with its own annotations. Download them as one tall PNG, a zip of the
+  parts, or a PDF with a page per part. "Shrink to one image" in the popup
+  keeps the old behaviour.
+- "Wait for slow content" in the popup holds each section until the page's
+  requests and nearby images have loaded, for pages that fill in late.
+- Keyboard shortcuts: Alt+Shift+P captures the full page; visible-area and
+  area capture can be given keys at `chrome://extensions/shortcuts`.
 - Undo and redo annotation changes.
 - Automatically save captures to a local history page. History keeps 20 images
   by default and can be changed from the history page.
@@ -144,11 +156,15 @@ export controls.
   taken out of the offsets handed to the viewer. Large jumps are only believed
   when the document grew to match, so a route change is not mistaken for a
   shift.
-- **Pages taller than a canvas are fitted, not cut.** Chrome will not allocate
-  a canvas past 32767px on a side, which a long page passes easily. Given the
-  choice between the whole page slightly reduced and a sharp fragment of it,
-  the stitcher scales the output down to fit and says by how much. Only a page
-  that would need reducing past a fifth is refused.
+- **Pages taller than a canvas are kept at full resolution.** Chrome will not
+  allocate a canvas past 32767px on a side, which a long page passes easily.
+  The stitcher starts a new part whenever the next frame would overflow, so
+  parts are cut between frames and every seam is one the seam check already
+  verified. On an app shell every part is placed where the pane sits, with the
+  header on the first and the footer on the last. The editor writes "One PNG"
+  a strip of rows at a time (`export-formats.js`), so the single file can be
+  taller than any canvas. With "Shrink to one image" chosen, the stitch is
+  scaled to fit instead, refused only past a fifth.
 - **The editor opens with a finished image.** Each frame is added to the worker's
   canvas as soon as its seam has been checked. At the end that canvas is encoded
   and stored once as both the capture and its initial history entry; only then
@@ -236,9 +252,12 @@ and attaches them to the capture handed to the viewer.
   with unstable offsets the capture is reported as incomplete.
 - Cross-origin iframes and closed shadow roots cannot be expanded or measured.
 - Selected-area capture is limited to the current visible viewport.
-- Pages past the height or frame budget (80,000px, 80 sections) are captured
-  up to it and reported as partial. A stitch taller than a canvas (~32k px)
-  is scaled down to fit.
+- Pages past the height, frame or time budget (400,000px, 400 sections, 10
+  minutes) are captured up to it and reported as partial.
+- Some image viewers cannot open a PNG taller than 65,535px; the zip of parts
+  opens anywhere. A very tall part makes a PDF page taller than some readers
+  accept.
+- Cropping is unavailable on captures saved in parts.
 - The strip of content hidden behind a sticky bottom bar at the very end of a
   page cannot be reached, since hiding the bar risks disturbing the app. It is
   the bar's own footprint, so the capture is still reported as complete.

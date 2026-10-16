@@ -536,12 +536,12 @@ const CAPTURE_RETRY_LIMIT = 60;
 const GROWTH_WAIT_MS = 700;
 const MAX_GROWTH_CHECKS = 2;
 const BUDGET = {
-  maxFrames: 80,
-  maxDurationMs: 180000,
-  // Beyond a canvas's reach on purpose: the stitcher fits an oversized page
-  // down rather than refusing it, so this is a guard against runaway infinite
-  // scroll rather than a technical ceiling.
-  maxContentHeight: 80000,
+  maxFrames: 400,
+  maxDurationMs: 600000,
+  // Far beyond a canvas on purpose: a taller stitch is saved in parts (or
+  // shrunk, if the user prefers), so this only guards against runaway
+  // infinite scroll.
+  maxContentHeight: 400000,
 };
 
 let lastCaptureAt = 0;
@@ -808,8 +808,16 @@ async function repairSeam({ dataUrl, measured, prevMeasured, prevBitmap, retries
  * ------------------------------------------------------------------------ */
 
 class IncrementalStitcher {
-  constructor(target) {
+  // `split`: a stitch taller than a canvas becomes several parts at full
+  // resolution, cut between frames, instead of one image shrunk to fit.
+  // Parts are written to the image store under `<keyPrefix>part:<n>`.
+  constructor(target, { split = false, keyPrefix = "" } = {}) {
     this.target = target;
+    this.split = split;
+    this.keyPrefix = keyPrefix;
+    this.parts = [];
+    // Output row where the part being drawn starts.
+    this.partTop = 0;
     this.frames = [];
     this.canvas = null;
     this.ctx = null;
@@ -826,6 +834,7 @@ class IncrementalStitcher {
   }
 
   plannedOutputScale(frame, contentHeight, shell) {
+    if (this.split) return 1;
     const scale = this.scale || frame.dpr || 1;
     const paneWidth = frame.source.width * scale;
     const chromeHeight = shell
@@ -909,11 +918,23 @@ class IncrementalStitcher {
       this.contentHeight = layout.contentHeight;
       if (!draw) return;
 
-      const plannedHeight = Math.max(
-        draw.dy + draw.dh,
-        Math.ceil(Math.max(contentHeight, frame.dest.top + frame.source.height) * this.scale * nextOutputScale)
+      const expected = Math.ceil(
+        Math.max(contentHeight, frame.dest.top + frame.source.height) * this.scale * nextOutputScale
       );
-      this.resize(layout.width, plannedHeight, nextOutputScale);
+      if (this.split) {
+        // Full resolution: when this frame would overflow the canvas, the
+        // part so far is finished and a new one starts at this frame, so no
+        // frame is ever divided between two images.
+        const limit = this.partLimit(layout.width);
+        if (this.canvas && draw.dy + draw.dh - this.partTop > limit) {
+          await this.flushPart(draw.dy - this.partTop);
+          this.partTop = draw.dy;
+        }
+        const bottom = draw.dy + draw.dh - this.partTop;
+        this.resize(layout.width, Math.min(limit, Math.max(bottom, expected - this.partTop)), 1);
+      } else {
+        this.resize(layout.width, Math.max(draw.dy + draw.dh, expected), nextOutputScale);
+      }
       this.ctx.drawImage(
         image,
         draw.sx,
@@ -921,7 +942,7 @@ class IncrementalStitcher {
         draw.sw,
         draw.sh,
         draw.dx,
-        draw.dy,
+        draw.dy - this.partTop,
         draw.dw,
         draw.dh
       );
@@ -935,6 +956,96 @@ class IncrementalStitcher {
     }
   }
 
+  // Tallest part a canvas can hold at this width, leaving room for an app
+  // shell's header and footer, which are painted onto the first and last.
+  partLimit(width) {
+    const chrome = this.shell
+      ? Math.ceil(
+          (this.shell.pane.top +
+            Math.max(0, this.shell.viewport.height - this.shell.pane.top - this.shell.pane.height)) *
+            this.scale
+        )
+      : 0;
+    return Math.min(FpsGeometry.MAX_CANVAS_SIDE - 4, Math.floor(FpsGeometry.MAX_CANVAS_PIXELS / width)) - chrome;
+  }
+
+  async flushPart(height) {
+    const rows = Math.max(1, Math.min(Math.round(height), this.canvas.height));
+    let out = this.canvas;
+    if (rows < this.canvas.height) {
+      out = new OffscreenCanvas(this.canvas.width, rows);
+      out.getContext("2d").drawImage(this.canvas, 0, 0);
+    }
+    const key = `${this.keyPrefix}part:${this.parts.length}`;
+    await FpsImages.put(key, await out.convertToBlob({ type: "image/png" }));
+    this.parts.push({ key, width: out.width, height: rows });
+    this.canvas = null;
+    this.ctx = null;
+  }
+
+  // Repaint one stored part with furniture around it: the window header and
+  // side columns above the first part, the footer below the last.
+  async dressPart(part, { header, footer, box, layoutWidth }) {
+    const image = await decodeFrame(await FpsImages.get(part.key));
+    let first = null;
+    let last = null;
+    try {
+      const width = Math.max(box.viewportWidth, box.paneX + layoutWidth);
+      const top = header ? box.paneY : 0;
+      const height = top + part.height + (footer ? box.footerHeight : 0);
+      const canvas = new OffscreenCanvas(width, height);
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, width, height);
+      ctx.imageSmoothingQuality = "high";
+      if (header) {
+        first = await decodeFrame(await FpsImages.get(this.firstKey));
+        ctx.drawImage(first, 0, 0, first.width, first.height, 0, 0, box.viewportWidth, box.viewportHeight);
+      }
+      ctx.drawImage(image, box.paneX, top);
+      if (footer && box.footerHeight > 0) {
+        last = await decodeFrame(await FpsImages.get(this.lastKey));
+        const finalFrame = this.frames[this.frames.length - 1];
+        const frameScale = last.width / finalFrame.viewportWidth;
+        const srcTop = Math.round((this.shell.pane.top + this.shell.pane.height) * frameScale);
+        const srcHeight = Math.max(0, last.height - srcTop);
+        if (srcHeight > 0) {
+          ctx.drawImage(last, 0, srcTop, last.width, srcHeight, 0, top + part.height, box.viewportWidth, box.footerHeight);
+        }
+      }
+      await FpsImages.put(part.key, await canvas.convertToBlob({ type: "image/png" }));
+      part.width = width;
+      part.height = height;
+    } finally {
+      image.close();
+      first?.close();
+      last?.close();
+    }
+  }
+
+  async finishParts(layout) {
+    await this.flushPart(layout.height - this.partTop);
+    if (this.shell) {
+      // Every part is placed where the pane sits in the window, so all of them
+      // share one width and stack into a single image cleanly; the first
+      // also gets the header, the last the footer.
+      const box = FpsGeometry.shellComposite(this.shell, { ...layout, height: 0, outputScale: 1 }, this.scale);
+      const last = this.parts.length - 1;
+      for (let i = 0; i <= last; i++) {
+        await this.dressPart(this.parts[i], { box, layoutWidth: layout.width, header: i === 0, footer: i === last });
+      }
+    }
+    return {
+      parts: this.parts,
+      width: Math.max(...this.parts.map((part) => part.width)),
+      height: this.parts.reduce((sum, part) => sum + part.height, 0),
+      downscaled: 0,
+      gaps: layout.gaps,
+      capturedHeight: layout.contentHeight,
+      shell: !!this.shell,
+    };
+  }
+
   async finish() {
     if (this.failed) throw this.failed;
     if (!this.canvas || !this.frames.length) throw new Error("No stitched frames were produced.");
@@ -943,6 +1054,7 @@ class IncrementalStitcher {
       scale: this.scale,
       outputScale: this.outputScale,
     });
+    if (this.parts.length) return this.finishParts(layout);
     const box = this.shell
       ? FpsGeometry.shellComposite(this.shell, layout, this.scale)
       : null;
@@ -1332,6 +1444,7 @@ async function captureFullPage(tab, options = {}) {
       diagnostics: result.diagnostics || undefined,
       mode: "fullPage",
     });
+    session.saved = true;
     reportCaptureProgress({
       percent: 100,
       label: "Capture complete",
@@ -1349,6 +1462,10 @@ async function captureFullPage(tab, options = {}) {
       await FpsImages.remove(session.frameKeys).catch((err) =>
         console.warn("Unable to delete capture frames:", err)
       );
+    }
+    // Parts of a stitch that never made it into history.
+    if (!session.saved && session.stitcher?.parts.length) {
+      await FpsImages.remove(session.stitcher.parts.map((part) => part.key)).catch(() => {});
     }
     endSession(tabId);
   }
@@ -1401,7 +1518,14 @@ async function runCaptureLoop(tab, session, target) {
   let driftRejections = 0;
   let lastDestTop = -1;
   let shell = null;
-  const stitcher = new IncrementalStitcher(target);
+  // "full" (the default): pages too tall for one image are saved in parts at
+  // full resolution. "shrink": one image, scaled down to fit.
+  const { settings = {} } = await chrome.storage.local.get("settings");
+  const stitcher = new IncrementalStitcher(target, {
+    split: settings.longPages !== "shrink",
+    keyPrefix: `cap:${session.runId}:`,
+  });
+  session.stitcher = stitcher;
   // The most the budgets let one run capture: the height cap, or the frame cap
   // at a full viewport per frame, whichever comes first. The stitcher plans its
   // canvas for this rather than the page, so a page past the budget is shrunk
@@ -1799,8 +1923,13 @@ async function saveCapture(tab, capture) {
   const pageUrl = tab.url;
   const pageTitle = tab.title;
 
-  if (capture.prestitched?.blob) {
+  if (capture.prestitched?.blob || capture.prestitched?.parts) {
     const { prestitched, ...metadata } = capture;
+    // A capture saved in parts is shown and thumbnailed by its first part.
+    const parts = prestitched.parts
+      ? prestitched.parts.map((part) => ({ imageKey: part.key, width: part.width, height: part.height }))
+      : null;
+    const firstBlob = parts ? await FpsImages.get(parts[0].imageKey) : prestitched.blob;
     const baseName = buildCaptureBaseName({ pageUrl, pageTitle, mode: capture.mode, capturedAt });
     const { history = [], historyLimit = 20 } = await chrome.storage.local.get([
       "history",
@@ -1808,11 +1937,11 @@ async function saveCapture(tab, capture) {
     ]);
     const limit = Math.min(50, Math.max(1, Number(historyLimit) || 20));
     const id = FpsImages.newId();
-    const imageKey = `img:${id}`;
+    const imageKey = parts ? parts[0].imageKey : `img:${id}`;
     const thumbKey = `thumb:${id}`;
-    await FpsImages.put(imageKey, prestitched.blob);
+    if (!parts) await FpsImages.put(imageKey, prestitched.blob);
     try {
-      await FpsImages.put(thumbKey, await FpsImages.makeThumbnail(prestitched.blob));
+      await FpsImages.put(thumbKey, await FpsImages.makeThumbnail(firstBlob));
     } catch (err) {
       // The history page makes one itself if this is missing.
       console.warn("Unable to make a history thumbnail:", err);
@@ -1826,6 +1955,7 @@ async function saveCapture(tab, capture) {
       // same until the editor saves an annotated version.
       baseKey: imageKey,
       thumbKey,
+      ...(parts ? { parts } : {}),
       mode: capture.mode || "fullPage",
       savedAt: capturedAt,
       title: pageTitle || "Screenshot",
@@ -1846,6 +1976,7 @@ async function saveCapture(tab, capture) {
         historyId: id,
         imageKey,
         baseKey: imageKey,
+        ...(parts ? { parts } : {}),
         pageUrl,
         pageTitle,
         prestitched: true,
@@ -1856,6 +1987,7 @@ async function saveCapture(tab, capture) {
           height: prestitched.height,
           shell: prestitched.shell,
           width: prestitched.width,
+          parts: parts ? parts.length : 0,
         },
       },
     });

@@ -40,6 +40,12 @@ const editor = {
   previewScale: 1,
   // The history entry this editor saves into, once there is one.
   historyId: "",
+  // A capture too tall for one image arrives in parts: [{ imageKey, width,
+  // height, outKey? }]. Only the current part's image is held; each part
+  // keeps its own annotations and undo history in partState.
+  parts: null,
+  partIndex: 0,
+  partState: [],
   pendingStyleEdit: null,
   redrawFrame: 0,
   redoStack: [],
@@ -184,22 +190,32 @@ function byteLength(chunks) {
 }
 
 function makePdfBlob(jpegBytes, imageWidth, imageHeight) {
+  return makePdfPages([{ jpegBytes, width: imageWidth, height: imageHeight }]);
+}
+
+// One page per image: a capture saved in parts becomes one page per part.
+function makePdfPages(pages) {
   const pageWidth = 612;
-  const pageHeight = Math.round((pageWidth * imageHeight) / imageWidth);
-  const content = `q\n${pageWidth} 0 0 ${pageHeight} 0 0 cm\n/Im1 Do\nQ\n`;
-  const objects = [
-    "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>`,
-    {
-      dictionary: `<< /Type /XObject /Subtype /Image /Width ${imageWidth} /Height ${imageHeight} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>`,
-      stream: jpegBytes,
-    },
-    {
-      dictionary: `<< /Length ${textBytes(content).length} >>`,
-      stream: textBytes(content),
-    },
-  ];
+  const objects = ["<< /Type /Catalog /Pages 2 0 R >>", ""];
+  const kids = [];
+  for (const page of pages) {
+    const pageHeight = Math.round((pageWidth * page.height) / page.width);
+    const pageObject = objects.length + 1;
+    kids.push(`${pageObject} 0 R`);
+    const content = `q\n${pageWidth} 0 0 ${pageHeight} 0 0 cm\n/Im1 Do\nQ\n`;
+    objects.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /XObject << /Im1 ${pageObject + 1} 0 R >> >> /Contents ${pageObject + 2} 0 R >>`,
+      {
+        dictionary: `<< /Type /XObject /Subtype /Image /Width ${page.width} /Height ${page.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${page.jpegBytes.length} >>`,
+        stream: page.jpegBytes,
+      },
+      {
+        dictionary: `<< /Length ${textBytes(content).length} >>`,
+        stream: textBytes(content),
+      }
+    );
+  }
+  objects[1] = `<< /Type /Pages /Kids [${kids.join(" ")}] /Count ${pages.length} >>`;
 
   const chunks = [textBytes("%PDF-1.4\n")];
   const offsets = [0];
@@ -638,13 +654,250 @@ function cloneLayout(layout = editor.layout) {
 // under the entry's `baseKey`; projects used to carry it inline as a data URL,
 // so every edit rewrote the whole screenshot into history.
 function cloneProject() {
+  if (editor.parts) stashPartState();
   return {
     version: 2,
     baseWidth: editor.baseCanvas.width,
     baseHeight: editor.baseCanvas.height,
-    operations: editor.operations.map(cloneOperation),
+    operations: editor.parts ? [] : editor.operations.map(cloneOperation),
+    ...(editor.parts
+      ? { parts: editor.partState.map((state) => ({ operations: state.operations.map(cloneOperation) })) }
+      : {}),
     layout: cloneLayout(),
   };
+}
+
+/* ------------------------------ parts ---------------------------------- */
+
+function newPartState(operations = []) {
+  const ops = operations.map((operation) => cloneOperation(operation));
+  return {
+    operations: ops,
+    undoStack: [],
+    redoStack: [],
+    nextOperationId: ops.reduce((max, operation) => Math.max(max, operation.id || 0), 0) + 1,
+  };
+}
+
+function stashPartState() {
+  editor.partState[editor.partIndex] = {
+    operations: editor.operations,
+    undoStack: editor.undoStack,
+    redoStack: editor.redoStack,
+    nextOperationId: editor.nextOperationId,
+  };
+}
+
+function applyPartState(state) {
+  editor.operations = state.operations;
+  editor.undoStack = state.undoStack;
+  editor.redoStack = state.redoStack;
+  editor.nextOperationId = state.nextOperationId;
+  editor.selectedIndex = -1;
+}
+
+async function loadPartCanvas(index) {
+  const part = editor.parts[index];
+  const blob = await FpsImages.get(part.imageKey);
+  if (!blob) throw new Error(`Part ${index + 1} is missing from storage.`);
+  const image = await loadFrameImage({ blob });
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  canvas.getContext("2d").drawImage(image, 0, 0);
+  return canvas;
+}
+
+function syncPartNav() {
+  const nav = document.getElementById("partNav");
+  if (!nav) return;
+  nav.hidden = !editor.parts;
+  if (!editor.parts) return;
+  document.getElementById("partLabel").textContent = `Part ${editor.partIndex + 1} of ${editor.parts.length}`;
+  document.getElementById("partPrev").disabled = editor.partIndex === 0;
+  document.getElementById("partNext").disabled = editor.partIndex === editor.parts.length - 1;
+  const total = editor.parts.reduce((sum, part) => sum + part.height, 0);
+  document.getElementById("dimensions").textContent =
+    `${editor.baseCanvas.width} x ${editor.baseCanvas.height}px of ${total}px`;
+}
+
+async function switchPart(index) {
+  if (!editor.parts || index === editor.partIndex || index < 0 || index >= editor.parts.length) return;
+  finalizeStyleEdit();
+  if (editor.activeTextInput) editor.activeTextInput.finish(true);
+  // The part being left is saved first, so its annotations are not lost if
+  // the editor is closed on the next one.
+  await saveRenderedPartToHistory().catch((err) => console.warn("Unable to save the part:", err));
+  stashPartState();
+  editor.baseCanvas = await loadPartCanvas(index);
+  editor.partIndex = index;
+  applyPartState(editor.partState[index]);
+  syncDisplayCanvases();
+  redraw();
+  applyLayoutPreview();
+  syncPartNav();
+  markExportsStale(editor.baseName, { quiet: true });
+}
+
+// Part `index` with its annotations, without the presentation layout: what
+// the stacked exports are built from. Blur and pixelate read the part's own
+// pixels through editor.baseCanvas, so it is swapped in for the render.
+async function renderPartAnnotated(index) {
+  if (index === editor.partIndex) return renderAnnotatedCanvas();
+  const base = await loadPartCanvas(index);
+  const saved = { base: editor.baseCanvas, operations: editor.operations };
+  editor.baseCanvas = base;
+  editor.operations = editor.partState[index].operations;
+  try {
+    return renderAnnotatedCanvas();
+  } finally {
+    editor.baseCanvas = saved.base;
+    editor.operations = saved.operations;
+  }
+}
+
+// What the stacked exports draw for each part: the stored image when it has
+// no annotations, otherwise a fresh render.
+async function partSources() {
+  stashPartState();
+  const sources = [];
+  for (let i = 0; i < editor.parts.length; i++) {
+    if (editor.partState[i].operations.length) sources.push(await renderPartAnnotated(i));
+    else sources.push(await FpsImages.get(editor.parts[i].imageKey));
+  }
+  return sources;
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+async function exportBusy(anchor, work) {
+  if (anchor.dataset.busy) return;
+  anchor.dataset.busy = "1";
+  const label = anchor.textContent;
+  anchor.textContent = "Preparing...";
+  try {
+    await work();
+  } catch (err) {
+    console.error("Export failed:", err);
+    showExportStatus("Export failed", "error");
+  } finally {
+    anchor.textContent = label;
+    delete anchor.dataset.busy;
+  }
+}
+
+function setupPartControls(baseName) {
+  if (!editor.parts) return;
+  document.getElementById("partPrev").addEventListener("click", () => switchPart(editor.partIndex - 1));
+  document.getElementById("partNext").addEventListener("click", () => switchPart(editor.partIndex + 1));
+  document.addEventListener("keydown", (event) => {
+    if (event.target.closest?.("input, textarea, select, [contenteditable]")) return;
+    if (event.key === "[") switchPart(editor.partIndex - 1);
+    if (event.key === "]") switchPart(editor.partIndex + 1);
+  });
+  // Cropping one part would leave it a different width from the rest.
+  const crop = document.querySelector('[data-tool="crop"]');
+  if (crop) crop.hidden = true;
+
+  const width = Math.max(...editor.parts.map((part) => part.width));
+  const all = document.getElementById("downloadAll");
+  const zip = document.getElementById("downloadZip");
+  const pdf = document.getElementById("downloadPdf");
+  all.hidden = false;
+  zip.hidden = false;
+  all.addEventListener("click", (event) => {
+    event.preventDefault();
+    exportBusy(all, async () => {
+      downloadBlob(await FpsExport.stackToPng(await partSources(), width), `${baseName}.png`);
+    });
+  });
+  zip.addEventListener("click", (event) => {
+    event.preventDefault();
+    exportBusy(zip, async () => {
+      const files = [];
+      const sources = await partSources();
+      for (let i = 0; i < sources.length; i++) {
+        const blob = sources[i] instanceof Blob ? sources[i] : await canvasToBlob(sources[i], "image/png");
+        files.push({ name: `${baseName}-part-${i + 1}.png`, bytes: new Uint8Array(await blob.arrayBuffer()) });
+      }
+      downloadBlob(new Blob(FpsExport.zipStore(files), { type: "application/zip" }), `${baseName}.zip`);
+    });
+  });
+  // A split capture's PDF has a page per part, built when asked for.
+  pdf.title = "Download PDF (one page per part)";
+  pdf.addEventListener(
+    "click",
+    (event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      exportBusy(pdf, async () => {
+        const pages = [];
+        for (const source of await partSources()) {
+          const canvas = source instanceof Blob ? await blobToCanvas(source) : source;
+          const jpeg = await canvasToBlob(makeJpegCanvas(canvas), "image/jpeg", editor.jpegQuality);
+          pages.push({ jpegBytes: new Uint8Array(await jpeg.arrayBuffer()), width: canvas.width, height: canvas.height });
+        }
+        downloadBlob(makePdfPages(pages), `${baseName}.pdf`);
+      });
+    },
+    true
+  );
+  syncPartNav();
+}
+
+async function blobToCanvas(blob) {
+  const image = await loadFrameImage({ blob });
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  canvas.getContext("2d").drawImage(image, 0, 0);
+  return canvas;
+}
+
+// A split capture keeps an annotated render per part (outKey) only for parts
+// that have annotations, so the history page's download includes them.
+async function saveRenderedPartToHistory() {
+  if (!editor.parts || !editor.historyReady) return;
+  const { history = [] } = await chrome.storage.local.get("history");
+  const index = findHistoryIndex(history);
+  if (index < 0) return;
+  const entry = history[index];
+  const id = entry.id || editor.historyId || FpsImages.newId();
+  const parts = (entry.parts || editor.parts).map((part) => ({ ...part }));
+  const part = parts[editor.partIndex];
+  if (editor.operations.length) {
+    part.outKey = `out:${id}:${editor.partIndex}`;
+    await FpsImages.put(part.outKey, await canvasToBlob(renderAnnotatedCanvas(), "image/png"));
+  } else if (part.outKey) {
+    await FpsImages.remove(part.outKey);
+    delete part.outKey;
+  }
+  const thumbKey = `thumb:${id}`;
+  if (editor.partIndex === 0) {
+    const shown = part.outKey ? await FpsImages.get(part.outKey) : await FpsImages.get(part.imageKey);
+    if (shown) await FpsImages.put(thumbKey, await FpsImages.makeThumbnail(shown));
+  }
+  editor.parts = parts;
+  const { history: latest = [] } = await chrome.storage.local.get("history");
+  const at = latest.findIndex((item) => item.id === entry.id && item.baseName === entry.baseName);
+  if (at < 0) return;
+  latest[at] = {
+    ...latest[at],
+    id,
+    parts,
+    imageKey: parts[0].outKey || parts[0].imageKey,
+    thumbKey,
+    project: cloneProject(),
+    updatedAt: Date.now(),
+  };
+  await chrome.storage.local.set({ history: latest });
 }
 
 function ensureOperationId(operation) {
@@ -1729,6 +1982,10 @@ function setupZoomControls() {
 }
 
 function loadProjectState(project) {
+  if (editor.parts) {
+    editor.partState = editor.parts.map((_, i) => newPartState(project?.parts?.[i]?.operations || []));
+    applyPartState(editor.partState[0]);
+  }
   if (!project) return;
 
   if (project.layout) {
@@ -1737,7 +1994,7 @@ function loadProjectState(project) {
       ...project.layout,
     };
   }
-  if (Array.isArray(project.operations)) {
+  if (Array.isArray(project.operations) && !editor.parts) {
     editor.operations = project.operations.map((operation) => ensureOperationId(cloneOperation(operation)));
     editor.nextOperationId =
       editor.operations.reduce((max, operation) => Math.max(max, operation.id || 0), 0) + 1;
@@ -2752,6 +3009,7 @@ async function saveProjectToHistory() {
 // `pngBlob`, when the caller already encoded the output, saves encoding a
 // large image twice.
 async function saveRenderedProjectToHistory(outputCanvas, pngBlob) {
+  if (editor.parts) return saveRenderedPartToHistory();
   if (!editor.historyReady || !editor.baseName || !editor.baseCanvas || !outputCanvas) return;
 
   const { history = [] } = await chrome.storage.local.get("history");
@@ -2817,6 +3075,12 @@ function captureNotice(capture, report) {
     parts.push(`Partial capture: ${capture.truncated.message}`);
   }
   if (report.scaleWarning) parts.push(report.scaleWarning);
+  if (capture.parts?.length > 1) {
+    parts.push(
+      `This page was too tall for one image, so it was saved in ${capture.parts.length} parts at full resolution. ` +
+        "Use the arrows (or [ and ]) to move between them; One PNG downloads the whole page as a single file."
+    );
+  }
   if (report.downscaled) {
     parts.push(
       `The page was taller than a single image can be, so it was scaled to ${Math.round(
@@ -2849,16 +3113,20 @@ async function main() {
   // its own copy of the image.
   const handedFrames = (capture.frames || []).map((frame) => frame.key).filter(Boolean);
 
+  if (capture.parts?.length > 1) editor.parts = capture.parts.map((part) => ({ ...part }));
+
   if (capture.prestitched && !capture.frames?.length) {
-    const blob = await FpsImages.get(capture.baseKey || capture.imageKey);
+    // A split capture opens on its first part.
+    const first = editor.parts ? editor.parts[0] : null;
+    const blob = await FpsImages.get(first ? first.imageKey : capture.baseKey || capture.imageKey);
     if (!blob) throw new Error("The prepared screenshot could not be found in history.");
     capture = {
       ...capture,
       frames: [{ x: 0, y: 0, blob }],
       metrics: {
         ...capture.metrics,
-        viewportWidth: capture.prestitchedReport?.width || capture.metrics.viewportWidth,
-        viewportHeight: capture.prestitchedReport?.height || capture.metrics.viewportHeight,
+        viewportWidth: first?.width || capture.prestitchedReport?.width || capture.metrics.viewportWidth,
+        viewportHeight: first?.height || capture.prestitchedReport?.height || capture.metrics.viewportHeight,
         dpr: 1,
       },
     };
@@ -2897,6 +3165,7 @@ async function main() {
   ).textContent = `${editor.baseCanvas.width} x ${editor.baseCanvas.height}px`;
 
   setupDownloadActions(baseName);
+  setupPartControls(baseName);
   setupJpegQuality(baseName);
   await setupCopyButton();
   await setupUploadButton();

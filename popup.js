@@ -137,6 +137,15 @@ waitForContent.addEventListener("change", async () => {
   await chrome.storage.local.set({ settings: { ...settings, waitForContent: waitForContent.checked } });
 });
 
+const longPages = document.getElementById("longPages");
+chrome.storage.local.get("settings").then(({ settings = {} }) => {
+  longPages.value = settings.longPages === "shrink" ? "shrink" : "full";
+});
+longPages.addEventListener("change", async () => {
+  const { settings = {} } = await chrome.storage.local.get("settings");
+  await chrome.storage.local.set({ settings: { ...settings, longPages: longPages.value } });
+});
+
 buttons.forEach((button) => {
   button.addEventListener("click", (event) => {
     // Alt/Shift-click forces the scroll-area picker when the automatic choice

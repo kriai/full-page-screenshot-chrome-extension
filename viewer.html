@@ -643,6 +643,16 @@
       vertical-align: top;
     }
 
+    .part-nav {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: 10px;
+      font-size: 12px;
+    }
+
+    .part-nav .button { padding: 2px 8px; min-width: 0; }
+
     .jpeg-quality {
       display: inline-flex;
       align-items: center;
@@ -918,6 +928,11 @@
     <header>
       <h1 id="title">Full Page Screenshot</h1>
       <span id="dimensions"></span>
+      <span class="part-nav" id="partNav" hidden>
+        <button type="button" class="button" id="partPrev" title="Previous part ([)" aria-label="Previous part">&lsaquo;</button>
+        <span id="partLabel"></span>
+        <button type="button" class="button" id="partNext" title="Next part (])" aria-label="Next part">&rsaquo;</button>
+      </span>
       <div class="zoom-controls" id="zoomControls" hidden aria-label="Zoom controls">
       <button class="zoom-button" id="zoomOut" type="button" title="Zoom out" aria-label="Zoom out">-</button>
       <span class="zoom-value" id="zoomValue">Fit</span>
@@ -947,6 +962,8 @@
         <a class="button" id="downloadPng" title="Download PNG">PNG</a>
         <a class="button" id="downloadJpeg" title="Download JPEG">JPEG</a>
         <a class="button" id="downloadPdf" title="Download PDF">PDF</a>
+        <a class="button" id="downloadAll" hidden title="Every part stacked into one full-resolution PNG (some image viewers cannot open images over 65,535px tall)">One PNG</a>
+        <a class="button" id="downloadZip" hidden title="Every part as its own PNG, in a zip">Zip</a>
       </div>
       <label class="jpeg-quality" title="JPEG and PDF quality, remembered for next time">
         <span>JPEG</span>
@@ -1204,6 +1221,7 @@
   </div>
   <script src="capture-geometry.js"></script>
   <script src="image-store.js"></script>
+  <script src="export-formats.js"></script>
   <script src="viewer.js"></script>
 </body>
 </html>
