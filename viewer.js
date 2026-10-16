@@ -25,7 +25,15 @@ const editor = {
     radius: 14,
     shadow: 28,
     aspect: "auto",
+    frame: "none",
+    frameAddress: true,
+    stamp: "none",
+    stampUrl: false,
   },
+  // For the browser frame's address bar and the date stamp.
+  pageUrl: "",
+  capturedAt: 0,
+  jpegQuality: 0.92,
   nextOperationId: 1,
   operations: [],
   pendingPreview: null,
@@ -1593,6 +1601,7 @@ function applyLayoutPreview() {
   const shell = document.getElementById("canvasShell");
   if (!shell || !editor.canvas) return;
 
+  updateChromePreview();
   if (!editor.layout.enabled) {
     shell.style.padding = "";
     shell.style.background = "";
@@ -1616,6 +1625,55 @@ function applyLayoutPreview() {
   shell.style.borderRadius = `${Math.max(8, scaledRadius + scaledPadding)}px`;
   if (editor.baseDisplayCanvas) editor.baseDisplayCanvas.style.borderRadius = `${scaledRadius}px`;
   editor.canvas.style.borderRadius = `${scaledRadius}px`;
+}
+
+// DOM stand-ins for the frame and stamp while editing, so the on-screen
+// preview matches what the export will draw.
+function updateChromePreview() {
+  const stack = document.getElementById("canvasStack") || editor.canvas?.parentElement;
+  if (!stack) return;
+  let frame = document.getElementById("framePreview");
+  if (!frame) {
+    frame = document.createElement("div");
+    frame.id = "framePreview";
+    frame.className = "frame-preview";
+    frame.innerHTML = '<span class="dots"><i></i><i></i><i></i></span><span class="address"></span>';
+    stack.parentElement.insertBefore(frame, stack);
+  }
+  let stamp = document.getElementById("stampPreview");
+  if (!stamp) {
+    stamp = document.createElement("div");
+    stamp.id = "stampPreview";
+    stamp.className = "stamp-preview";
+    stack.appendChild(stamp);
+  }
+
+  const theme = editor.layout.enabled ? FRAME_THEMES[editor.layout.frame] : null;
+  frame.hidden = !theme;
+  if (theme && editor.baseCanvas) {
+    const s = chromeScale(editor.baseCanvas.width);
+    const cssWidth = editor.canvas.getBoundingClientRect().width || editor.baseCanvas.width * editor.zoom;
+    frame.style.width = `${cssWidth}px`;
+    // The bar is 40px per density step in the export; scale it to the canvas
+    // as it is displayed.
+    frame.style.height = `${Math.round((40 * s * cssWidth) / editor.baseCanvas.width)}px`;
+    frame.style.background = theme.bar;
+    frame.style.color = theme.text;
+    frame.classList.toggle("windows", theme.controls === "buttons");
+    const dots = frame.querySelector(".dots");
+    dots.hidden = theme.controls !== "dots";
+    ["#ff5f57", "#febc2e", "#28c840"].forEach((color, i) => {
+      dots.children[i].style.background = color;
+    });
+    const address = frame.querySelector(".address");
+    address.hidden = !(editor.layout.frameAddress && editor.pageUrl);
+    address.style.background = theme.pill;
+    address.textContent = editor.pageUrl.replace(/^https?:\/\//, "");
+  }
+
+  const text = editor.layout.enabled && editor.layout.stamp !== "none" ? stampText() : "";
+  stamp.hidden = !text;
+  stamp.textContent = text;
 }
 
 function fitZoom() {
@@ -1764,9 +1822,121 @@ function presentationSize(imageWidth, imageHeight) {
   return { width, height };
 }
 
+const FRAME_THEMES = {
+  mac: { bar: "#e9e9eb", text: "#4b5563", pill: "#ffffff", controls: "dots" },
+  "mac-dark": { bar: "#2b2c30", text: "#d1d5db", pill: "#3a3b40", controls: "dots" },
+  windows: { bar: "#f3f3f3", text: "#374151", pill: "#ffffff", controls: "buttons" },
+  "windows-dark": { bar: "#202124", text: "#e5e7eb", pill: "#35363a", controls: "buttons" },
+};
+
+// Frame and stamp sizes follow the screenshot's pixel density: a 2x capture
+// is twice as wide, and its frame should look the same once displayed.
+function chromeScale(width) {
+  return Math.min(3, Math.max(0.75, width / 1280));
+}
+
+function stampText() {
+  const at = new Date(editor.capturedAt || Date.now());
+  const parts = [];
+  if (editor.layout.stamp === "date") parts.push(at.toLocaleDateString());
+  if (editor.layout.stamp === "datetime") parts.push(at.toLocaleString());
+  if (editor.layout.stamp === "iso") parts.push(at.toISOString());
+  if (editor.layout.stampUrl && editor.pageUrl) parts.push(editor.pageUrl);
+  return parts.join("  ·  ");
+}
+
+// The capture time (and page address, if asked for) in the bottom-right
+// corner of the screenshot.
+function drawStamp(screenshot) {
+  const text = editor.layout.stamp !== "none" ? stampText() : "";
+  if (!text) return screenshot;
+  const s = chromeScale(screenshot.width);
+  const ctx = screenshot.getContext("2d");
+  ctx.save();
+  ctx.font = `${Math.round(14 * s)}px system-ui, sans-serif`;
+  const maxWidth = screenshot.width - 40 * s;
+  const width = Math.min(maxWidth, ctx.measureText(text).width) + 20 * s;
+  const height = 28 * s;
+  const x = screenshot.width - width - 12 * s;
+  const y = screenshot.height - height - 12 * s;
+  ctx.fillStyle = "rgba(17, 24, 39, 0.72)";
+  roundRectPath(ctx, x, y, width, height, 6 * s);
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, x + 10 * s, y + height / 2, maxWidth);
+  ctx.restore();
+  return screenshot;
+}
+
+// A browser window's title bar above the screenshot: traffic lights for
+// macOS, window buttons for Windows, and the page address if wanted.
+function drawBrowserFrame(screenshot) {
+  const theme = FRAME_THEMES[editor.layout.frame];
+  if (!theme) return screenshot;
+  const s = chromeScale(screenshot.width);
+  const bar = Math.round(40 * s);
+  const canvas = document.createElement("canvas");
+  canvas.width = screenshot.width;
+  canvas.height = screenshot.height + bar;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = theme.bar;
+  roundRectPath(ctx, 0, 0, canvas.width, bar + 12 * s, 10 * s);
+  ctx.fill();
+  ctx.drawImage(screenshot, 0, bar);
+
+  let addressLeft = 16 * s;
+  let addressRight = canvas.width - 16 * s;
+  if (theme.controls === "dots") {
+    ["#ff5f57", "#febc2e", "#28c840"].forEach((color, i) => {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(20 * s + i * 20 * s, bar / 2, 6 * s, 0, Math.PI * 2);
+      ctx.fill();
+    });
+    addressLeft = 90 * s;
+    addressRight = canvas.width - 90 * s;
+  } else {
+    ctx.strokeStyle = theme.text;
+    ctx.lineWidth = Math.max(1, s);
+    const y = bar / 2;
+    const right = canvas.width - 22 * s;
+    ctx.beginPath();
+    ctx.moveTo(right - 5 * s, y - 5 * s);
+    ctx.lineTo(right + 5 * s, y + 5 * s);
+    ctx.moveTo(right + 5 * s, y - 5 * s);
+    ctx.lineTo(right - 5 * s, y + 5 * s);
+    ctx.stroke();
+    ctx.strokeRect(right - 51 * s, y - 5 * s, 10 * s, 10 * s);
+    ctx.beginPath();
+    ctx.moveTo(right - 97 * s, y);
+    ctx.lineTo(right - 87 * s, y);
+    ctx.stroke();
+    addressRight = canvas.width - 140 * s;
+  }
+
+  if (editor.layout.frameAddress && editor.pageUrl) {
+    const width = Math.max(0, addressRight - addressLeft);
+    const height = 24 * s;
+    const x = theme.controls === "dots" ? addressLeft + Math.max(0, width - Math.min(width, 640 * s)) / 2 : addressLeft;
+    const w = theme.controls === "dots" ? Math.min(width, 640 * s) : width;
+    ctx.fillStyle = theme.pill;
+    roundRectPath(ctx, x, (bar - height) / 2, w, height, 6 * s);
+    ctx.fill();
+    ctx.fillStyle = theme.text;
+    ctx.font = `${Math.round(13 * s)}px system-ui, sans-serif`;
+    ctx.textBaseline = "middle";
+    ctx.textAlign = theme.controls === "dots" ? "center" : "left";
+    const textX = theme.controls === "dots" ? x + w / 2 : x + 10 * s;
+    ctx.fillText(editor.pageUrl.replace(/^https?:\/\//, ""), textX, bar / 2, w - 20 * s);
+  }
+  return canvas;
+}
+
 function renderFinalCanvas() {
-  const screenshot = renderAnnotatedCanvas();
+  let screenshot = renderAnnotatedCanvas();
   if (!editor.layout.enabled) return screenshot;
+  screenshot = drawBrowserFrame(drawStamp(screenshot));
 
   const { width, height } = presentationSize(screenshot.width, screenshot.height);
   const canvas = document.createElement("canvas");
@@ -1813,7 +1983,7 @@ async function refreshExports(baseName, options = {}) {
   const outputCanvas = renderFinalCanvas();
   const pngBlob = await canvasToBlob(outputCanvas, "image/png");
   const jpegCanvas = makeJpegCanvas(outputCanvas);
-  const jpegBlob = await canvasToBlob(jpegCanvas, "image/jpeg", 0.92);
+  const jpegBlob = await canvasToBlob(jpegCanvas, "image/jpeg", editor.jpegQuality);
   const pdfBlob = makePdfBlob(
     new Uint8Array(await jpegBlob.arrayBuffer()),
     outputCanvas.width,
@@ -1838,6 +2008,35 @@ async function ensureFreshExports(baseName) {
   if (!editor.exportDirty && png?.dataset.exportReady === "1") return;
   showExportStatus("Updating...");
   await refreshExports(baseName);
+}
+
+// Editor defaults: the annotation style follows whatever was used last, and
+// the presentation layout is whatever was last saved with "Use as default".
+async function loadEditorDefaults() {
+  const { settings = {} } = await chrome.storage.local.get("settings");
+  return settings.editorDefaults || {};
+}
+
+async function saveEditorDefaults(patch) {
+  const { settings = {} } = await chrome.storage.local.get("settings");
+  const editorDefaults = { ...(settings.editorDefaults || {}), ...patch };
+  await chrome.storage.local.set({ settings: { ...settings, editorDefaults } });
+}
+
+function setupJpegQuality(baseName) {
+  const input = document.getElementById("jpegQuality");
+  const label = document.getElementById("jpegQualityValue");
+  if (!input) return;
+  input.value = String(Math.round(editor.jpegQuality * 100));
+  label.textContent = input.value;
+  input.addEventListener("input", () => {
+    label.textContent = input.value;
+  });
+  input.addEventListener("change", async () => {
+    editor.jpegQuality = Number(input.value) / 100;
+    await saveEditorDefaults({ jpegQuality: editor.jpegQuality });
+    scheduleExportRefresh(baseName);
+  });
 }
 
 function setupDownloadActions(baseName) {
@@ -1870,6 +2069,10 @@ function syncLayoutControlValues() {
 
   enabled.checked = Boolean(editor.layout.enabled);
   if (controls) controls.hidden = !enabled.checked;
+  document.getElementById("layoutFrame").value = editor.layout.frame || "none";
+  document.getElementById("layoutFrameAddress").checked = editor.layout.frameAddress !== false;
+  document.getElementById("layoutStamp").value = editor.layout.stamp || "none";
+  document.getElementById("layoutStampUrl").checked = !!editor.layout.stampUrl;
   background.value = editor.layout.background;
   aspect.value = editor.layout.aspect;
   padding.value = String(editor.layout.padding);
@@ -1893,6 +2096,12 @@ function setupLayoutControls(baseName) {
   const shadowValue = document.getElementById("layoutShadowValue");
   if (!enabled || !background || !aspect || !padding || !radius || !shadow) return;
 
+  const frame = document.getElementById("layoutFrame");
+  const frameAddress = document.getElementById("layoutFrameAddress");
+  const stamp = document.getElementById("layoutStamp");
+  const stampUrl = document.getElementById("layoutStampUrl");
+  const saveDefault = document.getElementById("layoutSaveDefault");
+
   function refreshLayout() {
     editor.layout = {
       enabled: enabled.checked,
@@ -1901,6 +2110,10 @@ function setupLayoutControls(baseName) {
       padding: Number(padding.value),
       radius: Number(radius.value),
       shadow: Number(shadow.value),
+      frame: frame.value,
+      frameAddress: frameAddress.checked,
+      stamp: stamp.value,
+      stampUrl: stampUrl.checked,
     };
     if (controls) controls.hidden = !editor.layout.enabled;
     if (paddingValue) paddingValue.textContent = `${editor.layout.padding} px`;
@@ -1911,6 +2124,14 @@ function setupLayoutControls(baseName) {
   }
 
   syncLayoutControlValues();
+  for (const control of [frame, frameAddress, stamp, stampUrl]) control.addEventListener("change", refreshLayout);
+  saveDefault.addEventListener("click", async () => {
+    await saveEditorDefaults({ layout: cloneLayout() });
+    saveDefault.textContent = "Saved as default";
+    setTimeout(() => {
+      saveDefault.textContent = "Use as default";
+    }, 1400);
+  });
   enabled.addEventListener("change", refreshLayout);
   background.addEventListener("change", refreshLayout);
   aspect.addEventListener("change", refreshLayout);
@@ -2661,6 +2882,13 @@ async function main() {
   const baseName = capture.baseName || buildBaseName(capture);
   editor.baseName = baseName;
   editor.exportBaseName = baseName;
+  editor.pageUrl = capture.pageUrl || "";
+  editor.capturedAt = capture.capturedAt || Date.now();
+  const defaults = await loadEditorDefaults();
+  if (defaults.jpegQuality) editor.jpegQuality = defaults.jpegQuality;
+  // A reopened project keeps its own layout; a new capture starts from the
+  // saved default.
+  if (defaults.layout && !capture.project?.layout) editor.layout = { ...editor.layout, ...defaults.layout };
   loadProjectState(capture.project);
   redraw();
 
@@ -2669,6 +2897,7 @@ async function main() {
   ).textContent = `${editor.baseCanvas.width} x ${editor.baseCanvas.height}px`;
 
   setupDownloadActions(baseName);
+  setupJpegQuality(baseName);
   await setupCopyButton();
   await setupUploadButton();
   if (capture.fromHistory || capture.historySaved) {
@@ -2681,6 +2910,13 @@ async function main() {
   markExportsStale(baseName, { quiet: true });
   status.textContent = "Preparing editor";
   setupAnnotationControls(baseName);
+  if (defaults.style) setCurrentStyle(defaults.style);
+  // The annotation style carries over to the next screenshot.
+  for (const id of ["color", "stroke", "textSize"]) {
+    document.getElementById(id)?.addEventListener("change", () => {
+      saveEditorDefaults({ style: currentStyle() }).catch(() => {});
+    });
+  }
   setupLayoutControls(baseName);
 
   document.getElementById("canvasShell").hidden = false;

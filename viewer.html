@@ -642,6 +642,46 @@
       display: inline-block;
       vertical-align: top;
     }
+
+    .jpeg-quality {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      opacity: 0.85;
+    }
+
+    .jpeg-quality input { width: 80px; }
+
+    /* On-screen previews of the browser frame and stamp; the exported image
+       draws them for real (drawBrowserFrame, drawStamp). */
+    .frame-preview {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      box-sizing: border-box;
+      padding: 0 12px;
+      border-radius: 10px 10px 0 0;
+      font: 12px system-ui, sans-serif;
+      overflow: hidden;
+    }
+
+    .frame-preview .dots { display: flex; gap: 6px; }
+    .frame-preview .dots i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+    .frame-preview .address { flex: 1; text-align: center; padding: 4px 10px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .frame-preview.windows .address { text-align: left; }
+
+    .stamp-preview {
+      position: absolute;
+      right: 10px;
+      bottom: 10px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      background: rgba(17, 24, 39, 0.72);
+      color: #fff;
+      font: 12px system-ui, sans-serif;
+      pointer-events: none;
+    }
     #baseDisplayCanvas,
     #editorCanvas {
       display: block;
@@ -908,6 +948,11 @@
         <a class="button" id="downloadJpeg" title="Download JPEG">JPEG</a>
         <a class="button" id="downloadPdf" title="Download PDF">PDF</a>
       </div>
+      <label class="jpeg-quality" title="JPEG and PDF quality, remembered for next time">
+        <span>JPEG</span>
+        <input id="jpegQuality" type="range" min="50" max="100" value="92" />
+        <span id="jpegQualityValue">92</span>
+      </label>
       <span class="export-status" id="exportStatus" hidden aria-live="polite"></span>
     </div>
   </header>
@@ -1058,6 +1103,34 @@
             <span class="value" id="layoutShadowValue">28 px</span>
             <input id="layoutShadow" type="range" min="0" max="80" value="28" />
           </div>
+          <div class="control">
+            <span>Browser frame</span>
+            <select id="layoutFrame">
+              <option value="none">None</option>
+              <option value="mac">macOS</option>
+              <option value="mac-dark">macOS dark</option>
+              <option value="windows">Windows</option>
+              <option value="windows-dark">Windows dark</option>
+            </select>
+          </div>
+          <label class="toggle-row">
+            <span>Show address in frame</span>
+            <input id="layoutFrameAddress" type="checkbox" checked />
+          </label>
+          <div class="control">
+            <span>Stamp</span>
+            <select id="layoutStamp">
+              <option value="none">None</option>
+              <option value="date">Date</option>
+              <option value="datetime">Date and time</option>
+              <option value="iso">ISO timestamp</option>
+            </select>
+          </div>
+          <label class="toggle-row">
+            <span>Add page address to stamp</span>
+            <input id="layoutStampUrl" type="checkbox" />
+          </label>
+          <button class="button" id="layoutSaveDefault" type="button" title="Start new screenshots with this presentation">Use as default</button>
         </div>
       </div>
       <div class="section">
