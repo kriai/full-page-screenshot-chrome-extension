@@ -53,34 +53,57 @@ const editor = {
   undoStack: [],
   zoom: 1,
   zoomMode: "fit",
+  // The style new annotations get, and the selected one shows. Hide areas
+  // keep their own strength so it does not follow the drawing thickness.
+  style: null,
+  hideMethod: "blur",
+  // Crop is a pending rectangle until Apply; null outside the crop tool.
+  cropDraft: null,
+  cropAspect: "free",
+  toolBeforeCrop: "arrow",
+  // Steps placed from this operation id on count from 1 again.
+  stepRestartId: 0,
 };
 
-const toolHints = {
-  arrow: "Drag to draw an arrow.",
-  rect: "Drag to draw a box.",
-  crop: "Drag to crop the screenshot.",
-  pen: "Drag to draw freehand.",
-  text: "Click the screenshot, then type.",
-  step: "Click to place a numbered marker.",
-  blur: "Drag over content to blur it.",
-  pixelate: "Drag over content to pixelate it.",
-  redact: "Drag over content to cover it.",
+const TOOLS = {
+  select: {
+    label: "Select",
+    key: "V",
+    hint: "Click any annotation to move, restyle or delete it. Everything you added is listed below.",
+  },
+  arrow: { label: "Arrow", key: "A", hint: "Drag to point at something." },
+  rect: { label: "Box", key: "R", hint: "Drag to outline an area." },
+  text: { label: "Text", key: "T", hint: "Click anywhere to add a label." },
+  step: { label: "Step", key: "S", hint: "Click to drop numbered markers. Numbers count up automatically." },
+  pen: { label: "Pen", key: "P", hint: "Draw freehand." },
+  hide: { label: "Hide", key: "H", hint: "Drag over anything sensitive: names, emails, numbers." },
+  crop: { label: "Crop", key: "C", hint: "Drag the edges to trim the screenshot." },
 };
 
-const defaultStyle = { color: "#ff453a", strokeWidth: 5, textSize: 28 };
+// B stays on Box for anyone used to the old shortcut.
+const shortcutToolMap = { v: "select", a: "arrow", r: "rect", b: "rect", t: "text", s: "step", p: "pen", h: "hide", c: "crop" };
+
+// The Hide tool draws one of three operation types; saved projects keep them.
+const HIDE_TYPES = ["blur", "pixelate", "redact"];
+const HIDE_NOTES = {
+  blur: "Softens content. Good for faces and backgrounds.",
+  pixelate: "Turns content into blocks. Hard to read, still shows shape.",
+  redact: "Solid bar. The safest choice for passwords, emails and IDs.",
+};
+// Presets over the stroke and text-size values the editor has always used.
+const THICKNESS = { thin: 3, medium: 5, thick: 9 };
+const TEXT_SIZES = { small: 20, medium: 28, large: 44 };
+const STEP_TEXT_SIZE = 28;
+const CROP_ASPECTS = { free: 0, "16:9": 16 / 9, "4:3": 4 / 3, "1:1": 1 };
+
+const defaultStyle = { color: "#E5484D", strokeWidth: 5, textSize: 28, strength: 5, textBackground: false };
+editor.style = { ...defaultStyle };
 const MAX_EDITOR_PREVIEW_PIXELS = 24000000;
 
-const shortcutToolMap = {
-  a: "arrow",
-  b: "rect",
-  c: "crop",
-  p: "pen",
-  t: "text",
-  s: "step",
-  u: "blur",
-  x: "pixelate",
-  r: "redact",
-};
+// Which panel a tool or an operation type belongs to.
+function toolGroup(typeOrTool) {
+  return HIDE_TYPES.includes(typeOrTool) ? "hide" : typeOrTool;
+}
 
 function loadImage(src) {
   return new Promise((resolve, reject) => {
@@ -451,7 +474,6 @@ function markExportsStale(baseName = editor.exportBaseName, options = {}) {
   editor.exportDirty = true;
   editor.exportVersion++;
   clearExportUrls();
-  if (!options.quiet) showExportStatus("Edited", "pending");
   scheduleProjectHistorySave();
 }
 
@@ -520,50 +542,85 @@ function pointerToCanvasPoint(event) {
   };
 }
 
-function currentStyle() {
+// The style an operation of `tool` is drawn with. Hide areas use the strength
+// as their stroke width, which blur and pixelate read as their amount.
+function currentStyle(tool = editor.currentTool) {
+  const style = editor.style;
   return {
-    color: document.getElementById("color").value,
-    strokeWidth: Number(document.getElementById("stroke").value),
-    textSize: Number(document.getElementById("textSize").value),
+    color: style.color,
+    strokeWidth: toolGroup(tool) === "hide" ? style.strength : style.strokeWidth,
+    textSize: style.textSize,
   };
 }
 
-function setCurrentColor(value) {
-  const color = document.getElementById("color");
-  if (!color) return;
-
-  color.value = value;
-  syncSwatchesForColor();
-  syncColorButtons(value);
-}
-
 function setCurrentStyle(style) {
-  const color = document.getElementById("color");
-  const stroke = document.getElementById("stroke");
-  const strokeValue = document.getElementById("strokeValue");
-  const textSize = document.getElementById("textSize");
-  const textSizeValue = document.getElementById("textSizeValue");
-
-  if (style.color && color) color.value = style.color;
-  if (style.strokeWidth && stroke) {
-    stroke.value = String(style.strokeWidth);
+  for (const key of Object.keys(defaultStyle)) {
+    if (style[key] !== undefined && style[key] !== null) editor.style[key] = style[key];
   }
-  if (style.textSize && textSize) {
-    textSize.value = String(style.textSize);
-    if (textSizeValue) textSizeValue.textContent = `${textSize.value} px`;
-  }
-  syncSwatchesForColor();
-  if (color) syncColorButtons(color.value);
-  syncStrokeValueLabel();
-  renderStylePreview();
+  if (HIDE_NOTES[style.hideMethod]) editor.hideMethod = style.hideMethod;
+  syncStyleControls();
 }
 
-function syncColorButtons(value) {
-  if (!value) return;
-  const normalized = value.toLowerCase();
-  document.querySelectorAll("[data-mini-color]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.miniColor.toLowerCase() === normalized);
-  });
+// The preset whose value is closest, so a value from an older version still
+// lights one up.
+function nearestPreset(presets, value) {
+  let best = null;
+  for (const [name, preset] of Object.entries(presets)) {
+    if (best === null || Math.abs(preset - value) < Math.abs(presets[best] - value)) best = name;
+  }
+  return best;
+}
+
+function setChecked(selector, attribute, value) {
+  for (const button of document.querySelectorAll(selector)) {
+    button.setAttribute("aria-checked", String(button.dataset[attribute] === value));
+  }
+}
+
+function strengthLabel(value, method) {
+  return method === "pixelate" ? `${Math.max(6, value * 4)}px` : `${value}px`;
+}
+
+// Puts editor.style into the panel's controls.
+function syncStyleControls() {
+  const style = editor.style;
+  const color = String(style.color).toLowerCase();
+  for (const swatch of document.querySelectorAll("[data-color]")) {
+    swatch.setAttribute("aria-checked", String(swatch.dataset.color.toLowerCase() === color));
+  }
+  setChecked("[data-thickness]", "thickness", nearestPreset(THICKNESS, style.strokeWidth));
+  setChecked("[data-text-size]", "textSize", nearestPreset(TEXT_SIZES, style.textSize));
+  const background = document.getElementById("textBackground");
+  if (background) background.checked = !!style.textBackground;
+
+  const selected = editor.operations[editor.selectedIndex];
+  const method = selected && HIDE_TYPES.includes(selected.type) ? selected.type : editor.hideMethod;
+  setChecked("[data-hide-method]", "hideMethod", method);
+  const note = document.getElementById("hideNote");
+  if (note) note.textContent = HIDE_NOTES[method];
+  const strength = document.getElementById("strength");
+  if (strength) {
+    strength.value = String(style.strength);
+    document.getElementById("strengthControl").hidden = method === "redact";
+    document.getElementById("strengthValue").textContent = strengthLabel(style.strength, method);
+  }
+
+  const next = document.getElementById("nextStep");
+  if (next) {
+    next.textContent = String(nextStepNumber());
+    next.style.background = style.color;
+    next.style.color = isLightColor(style.color) ? "#111111" : "#ffffff";
+  }
+}
+
+function isLightColor(value) {
+  const match = /^#?([0-9a-f]{6})$/i.exec(String(value));
+  if (!match) return false;
+  const n = parseInt(match[1], 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return 0.299 * r + 0.587 * g + 0.114 * b > 186;
 }
 
 function textFromEditor(element) {
@@ -602,7 +659,7 @@ function openTextEditor(point, baseName) {
   shell.appendChild(wrap);
 
   function syncStyle() {
-    const style = currentStyle();
+    const style = currentStyle("text");
     input.style.color = style.color;
     input.style.fontSize = `${Math.max(13, style.textSize * scaleY)}px`;
     input.style.textShadow = "0 1px 2px rgba(0, 0, 0, 0.85)";
@@ -616,7 +673,10 @@ function openTextEditor(point, baseName) {
     editor.activeTextInput = null;
 
     if (commit && text) {
-      pushOperation({ type: "text", point, text, ...currentStyle() }, baseName);
+      pushOperation(
+        { type: "text", point, text, ...currentStyle("text"), background: !!editor.style.textBackground },
+        baseName
+      );
     }
   }
 
@@ -694,6 +754,7 @@ function applyPartState(state) {
   editor.redoStack = state.redoStack;
   editor.nextOperationId = state.nextOperationId;
   editor.selectedIndex = -1;
+  editor.stepRestartId = 0;
 }
 
 async function loadPartCanvas(index) {
@@ -716,9 +777,21 @@ function syncPartNav() {
   document.getElementById("partLabel").textContent = `Part ${editor.partIndex + 1} of ${editor.parts.length}`;
   document.getElementById("partPrev").disabled = editor.partIndex === 0;
   document.getElementById("partNext").disabled = editor.partIndex === editor.parts.length - 1;
-  const total = editor.parts.reduce((sum, part) => sum + part.height, 0);
+  syncMeta();
+}
+
+// The top bar's meta line: the image's size and how many annotations it has.
+function syncMeta() {
+  if (!editor.baseCanvas) return;
+  const { width, height } = editor.baseCanvas;
+  const total = editor.parts ? editor.parts.reduce((sum, part) => sum + part.height, 0) : 0;
   document.getElementById("dimensions").textContent =
-    `${editor.baseCanvas.width} x ${editor.baseCanvas.height}px of ${total}px`;
+    `${width} × ${height}` + (editor.parts ? ` of ${total}` : "");
+  const count = document.getElementById("annotationCount");
+  if (!count || !editor.canvas) return;
+  const n = editor.operations.length;
+  count.hidden = false;
+  count.textContent = `${n} annotation${n === 1 ? "" : "s"}`;
 }
 
 async function switchPart(index) {
@@ -737,6 +810,9 @@ async function switchPart(index) {
   applyLayoutPreview();
   syncPartNav();
   syncJpegLabel();
+  syncEditActionState();
+  syncStyleControlVisibility();
+  syncNavigator();
   markExportsStale(editor.baseName, { quiet: true });
 }
 
@@ -817,32 +893,17 @@ async function shrunkWholePage(sources) {
   return canvas;
 }
 
-// The Download button and its menu. The button gives the best-quality file;
-// the menu names each choice by what it is for. Choices that only make sense
-// for a capture saved in parts appear only then.
-function setupDownloadMenu(baseName) {
-  const primary = document.getElementById("downloadPrimary");
-  const toggle = document.getElementById("downloadToggle");
-  const menu = document.getElementById("downloadMenu");
-  const split = !!editor.parts;
-
-  document.getElementById("downloadSplit").hidden = !split;
-  if (split) {
-    document.getElementById("pngSub").textContent = "PNG, one tall image";
-    document.getElementById("jpegSub").dataset.suffix = ", shrunk to fit";
-    document.getElementById("pdfSub").textContent = "PDF, a page per part";
-    document.getElementById("zipSub").textContent = `zip of ${editor.parts.length} PNGs`;
-  }
-  syncJpegLabel();
-
+// A button that opens a menu below it. The menu closes on a click outside
+// `container`, on Escape, and when the returned function is called.
+function setupMenu(toggle, menu, container) {
   const setOpen = (open) => {
     menu.hidden = !open;
     toggle.setAttribute("aria-expanded", String(open));
-    if (open) menu.querySelector("button[data-download]")?.focus();
+    if (open) menu.querySelector("button[role='menuitem']")?.focus();
   };
   toggle.addEventListener("click", () => setOpen(menu.hidden));
   document.addEventListener("click", (event) => {
-    if (!menu.hidden && !event.target.closest("#download")) setOpen(false);
+    if (!menu.hidden && !container.contains(event.target)) setOpen(false);
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !menu.hidden) {
@@ -850,6 +911,28 @@ function setupDownloadMenu(baseName) {
       toggle.focus();
     }
   });
+  return setOpen;
+}
+
+// The Export menu names each file by what it is for. Choices that only make
+// sense for a capture saved in parts appear only then. Copy, beside it, is the
+// one primary action; upload is here and never the default.
+function setupDownloadMenu(baseName) {
+  const toggle = document.getElementById("downloadToggle");
+  const menu = document.getElementById("downloadMenu");
+  const split = !!editor.parts;
+
+  document.getElementById("downloadSplit").hidden = !split;
+  if (split) {
+    document.getElementById("pngSub").textContent = "One tall image, best quality";
+    document.getElementById("jpegSub").textContent = "Smaller file, shrunk to fit";
+    document.getElementById("pdfSub").textContent = "One page per part";
+    document.getElementById("zipSub").textContent = `Zip of ${editor.parts.length} PNGs`;
+  }
+  syncJpegLabel();
+
+  const setOpen = setupMenu(toggle, menu, document.getElementById("download"));
+  menu.querySelector("#upload").addEventListener("click", () => setOpen(false));
 
   const width = split ? Math.max(...editor.parts.map((part) => part.width)) : 0;
   const actions = {
@@ -904,17 +987,14 @@ function setupDownloadMenu(baseName) {
       showExportStatus("Export failed", "error");
     }
   };
-  primary.addEventListener("click", () => run("png"));
   for (const item of menu.querySelectorAll("[data-download]")) {
     item.addEventListener("click", () => run(item.dataset.download));
   }
 }
 
 function syncJpegLabel() {
-  const sub = document.getElementById("jpegSub");
-  if (sub) sub.textContent = `JPEG · quality ${Math.round(editor.jpegQuality * 100)}${sub.dataset.suffix || ""}`;
   const part = document.getElementById("partSub");
-  if (part && editor.parts) part.textContent = `part ${editor.partIndex + 1}, PNG`;
+  if (part && editor.parts) part.textContent = `Part ${editor.partIndex + 1}, PNG`;
 }
 
 async function blobToCanvas(blob) {
@@ -974,39 +1054,25 @@ function findOperationIndexById(id) {
   return editor.operations.findIndex((operation) => operation.id === id);
 }
 
-function syncSwatchesForColor() {
-  const color = document.getElementById("color");
-  if (!color) return;
-
-  document.querySelectorAll("[data-color]").forEach((swatch) => {
-    swatch.classList.toggle(
-      "active",
-      swatch.dataset.color.toLowerCase() === color.value.toLowerCase()
-    );
-  });
-}
-
+// The selected annotation's style becomes the current one, as it always has:
+// what the panel shows is what the next annotation gets.
 function loadOperationStyle(operation) {
   if (!operation) return;
-
-  const color = document.getElementById("color");
-  const stroke = document.getElementById("stroke");
-  const strokeValue = document.getElementById("strokeValue");
-  const textSize = document.getElementById("textSize");
-  const textSizeValue = document.getElementById("textSizeValue");
-
-  if (operation.color && color) color.value = operation.color;
-  if (operation.strokeWidth && stroke) {
-    stroke.value = String(operation.strokeWidth);
+  const group = toolGroup(operation.type);
+  const style = editor.style;
+  if (group === "hide") {
+    if (operation.type !== "redact" && operation.strokeWidth) style.strength = operation.strokeWidth;
+    editor.hideMethod = operation.type;
+  } else {
+    if (operation.color) style.color = operation.color;
+    if (["arrow", "rect", "pen"].includes(group) && operation.strokeWidth) style.strokeWidth = operation.strokeWidth;
+    if (group === "text") {
+      if (operation.textSize) style.textSize = operation.textSize;
+      style.textBackground = !!operation.background;
+    }
   }
-  if (operation.textSize && textSize) {
-    textSize.value = String(operation.textSize);
-    if (textSizeValue) textSizeValue.textContent = `${textSize.value} px`;
-  }
-  syncSwatchesForColor();
-  if (color) syncColorButtons(color.value);
+  syncStyleControls();
   syncStyleControlVisibility();
-  renderStylePreview();
 }
 
 function commitUndoAction(action) {
@@ -1068,7 +1134,6 @@ function syncAfterHistoryChange(baseName) {
   const selected = editor.operations[editor.selectedIndex];
   if (selected) loadOperationStyle(selected);
   syncStyleControlVisibility();
-  renderStylePreview();
   scheduleExportRefresh(baseName);
 }
 
@@ -1083,27 +1148,38 @@ function pushOperation(operation, baseName = editor.baseName) {
   scheduleExportRefresh(baseName);
 }
 
+// One more than the highest step placed since the last "Restart at 1".
 function nextStepNumber() {
   return (
     editor.operations
-      .filter((operation) => operation.type === "step")
+      .filter((operation) => operation.type === "step" && (operation.id || 0) >= editor.stepRestartId)
       .reduce((max, operation) => Math.max(max, operation.number || 0), 0) + 1
   );
 }
 
-function textBounds(operation) {
-  const ctx = editor.ctx;
+// The space a label background adds around its text.
+function textPadding(operation, textSize = operation.textSize) {
+  return operation.background ? { x: textSize * 0.4, y: textSize * 0.22 } : { x: 0, y: 0 };
+}
+
+function measureText(operation) {
+  const ctx = editor.ctx || document.createElement("canvas").getContext("2d");
   const lines = operation.text.split("\n");
-  const lineHeight = operation.textSize * 1.22;
   ctx.save();
   ctx.font = `700 ${operation.textSize}px system-ui, sans-serif`;
   const width = Math.max(1, ...lines.map((line) => ctx.measureText(line).width));
   ctx.restore();
+  return { width, height: operation.textSize * 1.22 * lines.length };
+}
+
+function textBounds(operation) {
+  const { width, height } = measureText(operation);
+  const pad = textPadding(operation);
   return {
-    x: operation.point.x,
-    y: operation.point.y,
-    width,
-    height: lineHeight * lines.length,
+    x: operation.point.x - pad.x,
+    y: operation.point.y - pad.y,
+    width: width + pad.x * 2,
+    height: height + pad.y * 2,
   };
 }
 
@@ -1145,14 +1221,6 @@ function operationBounds(operation) {
   }
   if (operation.type === "blur") return { ...operation.rect };
   return { x: 0, y: 0, width: 0, height: 0 };
-}
-
-function syncMiniToolbar() {
-  const toolbar = document.getElementById("miniToolbar");
-  if (toolbar) {
-    toolbar.hidden = true;
-    toolbar.classList.remove("visible");
-  }
 }
 
 function containsPoint(rect, point, padding = 0) {
@@ -1200,20 +1268,38 @@ function drawSelection(ctx) {
   if (!operation) return;
 
   const bounds = operationBounds(operation);
+  const px = cssPixel();
   ctx.save();
-  ctx.strokeStyle = "#78a0ff";
-  ctx.lineWidth = Math.max(2, editor.baseCanvas.width / editor.canvas.getBoundingClientRect().width);
-  ctx.setLineDash([8, 6]);
+  // Dark dashes over a white line read on light and dark screenshots alike.
+  ctx.lineWidth = px;
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+  ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
+  ctx.strokeStyle = "#111111";
+  ctx.setLineDash([6 * px, 4 * px]);
   ctx.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
   ctx.setLineDash([]);
-  ctx.fillStyle = "#fff";
-  ctx.strokeStyle = "#4f7cff";
-  for (const handle of selectionHandles(operation)) {
-    ctx.beginPath();
-    ctx.arc(handle.x, handle.y, Math.max(5, ctx.lineWidth * 3), 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  }
+  for (const handle of selectionHandles(operation)) drawHandle(ctx, handle.x, handle.y);
+  ctx.restore();
+}
+
+// Base-image pixels per CSS pixel at the current zoom, for drawing editor
+// chrome at a constant on-screen size.
+function cssPixel() {
+  const width = editor.canvas.getBoundingClientRect().width || editor.baseCanvas.width;
+  return editor.baseCanvas.width / width;
+}
+
+// A 10px white square with a 2px dark border.
+function drawHandle(ctx, x, y) {
+  const px = cssPixel();
+  const size = 10 * px;
+  ctx.save();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#ffffff";
+  ctx.strokeStyle = "#111111";
+  ctx.lineWidth = 2 * px;
+  ctx.fillRect(x - size / 2, y - size / 2, size, size);
+  ctx.strokeRect(x - size / 2, y - size / 2, size, size);
   ctx.restore();
 }
 
@@ -1288,8 +1374,9 @@ function resizeOperation(operation, startOperation, startBounds, handle, point) 
       nextBounds.width / Math.max(1, startBounds.width),
       nextBounds.height / Math.max(1, startBounds.height)
     );
-    operation.point = { x: nextBounds.x, y: nextBounds.y };
     operation.textSize = Math.max(8, Math.round(startOperation.textSize * scale));
+    const pad = textPadding(operation);
+    operation.point = { x: nextBounds.x + pad.x, y: nextBounds.y + pad.y };
     return;
   }
   if (operation.type === "step") {
@@ -1299,102 +1386,6 @@ function resizeOperation(operation, startOperation, startBounds, handle, point) 
     };
     operation.radius = Math.max(18, Math.min(nextBounds.width, nextBounds.height) / 2);
   }
-}
-
-function renderStylePreview() {
-  const canvas = document.getElementById("stylePreview");
-  if (!canvas) return;
-
-  const cssWidth = 132;
-  const cssHeight = 44;
-  const scale = Math.max(1, window.devicePixelRatio || 1);
-  if (canvas.width !== cssWidth * scale || canvas.height !== cssHeight * scale) {
-    canvas.width = cssWidth * scale;
-    canvas.height = cssHeight * scale;
-  }
-
-  const ctx = canvas.getContext("2d");
-  const style = currentStyle();
-  const previewTool = styleControlTool();
-  ctx.setTransform(scale, 0, 0, scale, 0, 0);
-  ctx.clearRect(0, 0, cssWidth, cssHeight);
-
-  if (previewTool === "text") {
-    drawText(ctx, {
-      type: "text",
-      point: { x: 14, y: 12 },
-      text: "Text",
-      ...style,
-    });
-    return;
-  }
-  if (previewTool === "step") {
-    drawStep(ctx, {
-      type: "step",
-      point: { x: cssWidth / 2, y: cssHeight / 2 },
-      number: nextStepNumber(),
-      radius: 17,
-      ...style,
-    });
-    return;
-  }
-  if (previewTool === "rect") {
-    drawRect(ctx, {
-      type: "rect",
-      rect: { x: 24, y: 13, width: 84, height: 20 },
-      ...style,
-    });
-    return;
-  }
-  if (previewTool === "pen") {
-    drawPen(ctx, {
-      type: "pen",
-      points: [
-        { x: 20, y: 36 },
-        { x: 50, y: 15 },
-        { x: 78, y: 34 },
-        { x: 110, y: 16 },
-      ],
-      ...style,
-    });
-    return;
-  }
-  if (previewTool === "pixelate") {
-    ctx.fillStyle = "#344055";
-    ctx.fillRect(24, 13, 84, 20);
-    ctx.fillStyle = "#78a0ff";
-    for (let x = 24; x < 108; x += 12) {
-      for (let y = 13; y < 33; y += 12) ctx.fillRect(x, y, 10, 10);
-    }
-    return;
-  }
-  if (previewTool === "blur") {
-    ctx.fillStyle = "#344055";
-    ctx.fillRect(24, 13, 84, 20);
-    ctx.fillStyle = "#e8edf6";
-    ctx.fillRect(34, 18, 64, 4);
-    ctx.fillRect(34, 26, 52, 4);
-    applyBlur(ctx, {
-      type: "blur",
-      rect: { x: 24, y: 13, width: 84, height: 20 },
-      ...style,
-    });
-    return;
-  }
-  if (previewTool === "redact") {
-    applyRedact(ctx, {
-      type: "redact",
-      rect: { x: 24, y: 13, width: 84, height: 20 },
-      ...style,
-    });
-    return;
-  }
-  drawArrow(ctx, {
-    type: "arrow",
-    from: { x: 20, y: 34 },
-    to: { x: 112, y: 14 },
-    ...style,
-  });
 }
 
 function applyAnnotationShadow(ctx, size = 6) {
@@ -1497,6 +1488,19 @@ function drawText(ctx, operation) {
   ctx.font = `700 ${operation.textSize}px system-ui, sans-serif`;
   ctx.textBaseline = "top";
   ctx.lineJoin = "round";
+  if (operation.background) {
+    // A label: the text on a solid box, dark or light against its colour.
+    const bounds = textBounds(operation);
+    applyAnnotationShadow(ctx, operation.textSize * 0.35);
+    ctx.fillStyle = isLightColor(operation.color) ? "#111318" : "#ffffff";
+    roundRectPath(ctx, bounds.x, bounds.y, bounds.width, bounds.height, operation.textSize * 0.25);
+    ctx.fill();
+    clearAnnotationShadow(ctx);
+    ctx.fillStyle = operation.color;
+    lines.forEach((line, index) => ctx.fillText(line, operation.point.x, operation.point.y + index * lineHeight));
+    ctx.restore();
+    return;
+  }
   ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
   ctx.lineWidth = Math.max(1, operation.strokeWidth);
   ctx.fillStyle = operation.color;
@@ -1588,10 +1592,18 @@ function drawEffectOutline(ctx, operation) {
   const { rect } = operation;
   if (!rect || rect.width < 2 || rect.height < 2) return;
 
+  strokeDashedRect(ctx, rect);
+}
+
+// Editor-only outline for areas being drawn: dark dashes on white.
+function strokeDashedRect(ctx, rect) {
+  const px = cssPixel();
   ctx.save();
-  ctx.strokeStyle = operation.type === "redact" ? "#f2f4f8" : "#78a0ff";
-  ctx.lineWidth = Math.max(2, operation.strokeWidth || 2);
-  ctx.setLineDash([10, 8]);
+  ctx.lineWidth = 2 * px;
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+  ctx.strokeStyle = "#111111";
+  ctx.setLineDash([6 * px, 4 * px]);
   ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
   ctx.restore();
 }
@@ -1638,33 +1650,48 @@ function drawPreview(ctx, operation) {
     return;
   }
 
-  if (
-    operation.type === "redact" ||
-    operation.type === "blur" ||
-    operation.type === "crop"
-  ) {
-    ctx.save();
-    ctx.strokeStyle = operation.type === "redact" ? "#f2f4f8" : "#78a0ff";
-    if (operation.type === "crop") {
-      ctx.fillStyle = "rgba(0, 0, 0, 0.38)";
-      ctx.beginPath();
-      ctx.rect(0, 0, ctx.canvas.width, ctx.canvas.height);
-      ctx.rect(operation.rect.x, operation.rect.y, operation.rect.width, operation.rect.height);
-      ctx.fill("evenodd");
-      ctx.strokeStyle = "#ffffff";
-    }
-    ctx.lineWidth = Math.max(2, operation.strokeWidth);
-    ctx.setLineDash([10, 8]);
-    ctx.strokeRect(
-      operation.rect.x,
-      operation.rect.y,
-      operation.rect.width,
-      operation.rect.height
-    );
-    ctx.restore();
+  if (operation.type === "redact") {
+    applyRedact(ctx, operation);
+    return;
+  }
+  if (operation.type === "blur") {
+    drawEffectMarker(ctx, operation);
     return;
   }
   applyOperation(ctx, operation);
+}
+
+// The pending crop: everything outside it dimmed, its edges draggable.
+function drawCropOverlay(ctx) {
+  const rect = editor.cropDraft;
+  if (!rect) return;
+  const { width, height } = editor.baseCanvas;
+  const px = cssPixel();
+  ctx.save();
+  ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+  ctx.beginPath();
+  ctx.rect(0, 0, width, height);
+  ctx.rect(rect.x, rect.y, rect.width, rect.height);
+  ctx.fill("evenodd");
+  ctx.lineWidth = 2 * px;
+  ctx.strokeStyle = "#ffffff";
+  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+  ctx.restore();
+  for (const handle of cropHandles(rect)) drawHandle(ctx, handle.x, handle.y);
+}
+
+function cropHandles(rect) {
+  const { x, y, width: w, height: h } = rect;
+  return [
+    { edge: "nw", x, y },
+    { edge: "n", x: x + w / 2, y },
+    { edge: "ne", x: x + w, y },
+    { edge: "e", x: x + w, y: y + h / 2 },
+    { edge: "se", x: x + w, y: y + h },
+    { edge: "s", x: x + w / 2, y: y + h },
+    { edge: "sw", x, y: y + h },
+    { edge: "w", x, y: y + h / 2 },
+  ];
 }
 
 function applyOperation(ctx, operation) {
@@ -1683,14 +1710,10 @@ function drawEffectMarker(ctx, operation) {
   if (!rect || rect.width < 2 || rect.height < 2) return;
 
   ctx.save();
-  ctx.fillStyle =
-    operation.type === "pixelate" ? "rgba(120, 160, 255, 0.14)" : "rgba(245, 248, 255, 0.12)";
-  ctx.strokeStyle = operation.type === "pixelate" ? "#78a0ff" : "#f2f4f8";
-  ctx.lineWidth = Math.max(2, operation.strokeWidth || 2);
-  ctx.setLineDash([10, 8]);
+  ctx.fillStyle = "rgba(17, 17, 17, 0.12)";
   ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
   ctx.restore();
+  strokeDashedRect(ctx, rect);
 }
 
 function drawEditorOperation(ctx, operation) {
@@ -1719,19 +1742,22 @@ function redraw(preview = null) {
   }
   if (preview) drawPreview(editor.ctx, preview);
   if (!preview) drawSelection(editor.ctx);
-  if (!preview) syncMiniToolbar();
+  if (editor.currentTool === "crop") drawCropOverlay(editor.ctx);
   editor.ctx.setTransform(1, 0, 0, 1, 0, 0);
+  scheduleNavigatorRender();
 }
 
 function makeDragOperation(tool, start, end) {
-  const style = currentStyle();
+  const style = currentStyle(tool);
   if (tool === "arrow") {
     return { type: "arrow", from: start, to: end, ...style };
   }
-  if (tool === "redact") {
-    return { type: tool, rect: normalizeRect(start, end), ...style, color: "#111111" };
+  if (tool === "hide") {
+    const type = editor.hideMethod;
+    const rect = normalizeRect(start, end);
+    return type === "redact" ? { type, rect, ...style, color: "#111111" } : { type, rect, ...style };
   }
-  if (tool === "rect" || tool === "pixelate" || tool === "blur" || tool === "crop") {
+  if (tool === "rect") {
     return { type: tool, rect: normalizeRect(start, end), ...style };
   }
   return null;
@@ -1766,12 +1792,14 @@ function cropToRect(rect, baseName = editor.baseName) {
   setCanvasCssWidth(editor.canvas, 0);
   editor.operations.forEach((operation) => moveOperation(operation, -x, -y));
   editor.selectedIndex = -1;
-  document.getElementById("dimensions").textContent = `${width} x ${height}px`;
+  syncMeta();
   redraw();
   applyZoom(fitZoom(), "fit");
   markExportsStale(baseName);
 }
 
+// A short line in the top bar for exports that take a moment: preparing,
+// done, failed. Done and failed fade on their own.
 function showExportStatus(text, state = "pending") {
   const status = document.getElementById("exportStatus");
   if (!status) return;
@@ -1779,12 +1807,12 @@ function showExportStatus(text, state = "pending") {
   clearTimeout(editor.exportStatusTimer);
   status.hidden = false;
   status.textContent = text;
-  status.classList.toggle("done", state === "done");
-  if (state === "done") {
+  status.classList.toggle("error", state === "error");
+  if (state === "done" || state === "error") {
     editor.exportStatusTimer = setTimeout(() => {
       status.hidden = true;
-      status.classList.remove("done");
-    }, 1200);
+      status.classList.remove("error");
+    }, state === "error" ? 4000 : 1600);
   }
 }
 
@@ -1792,36 +1820,34 @@ function scheduleExportRefresh(baseName) {
   markExportsStale(baseName);
 }
 
-function pulseFeedback(element) {
-  element.classList.remove("feedback");
-  void element.offsetWidth;
-  element.classList.add("feedback");
-}
+const COPY_ICONS = {
+  copy: "M8 8h12v12H8zM4 16V4h12",
+  check: "M5 12l5 5L20 7",
+};
 
+// The Copy button's icon and label; "check" after a successful copy.
 function setButtonLabel(button, icon, text) {
   button.textContent = "";
-  const iconElement = document.createElement("span");
-  iconElement.className = "icon";
-  iconElement.setAttribute("aria-hidden", "true");
-  if (icon === "copy") {
-    iconElement.innerHTML = `
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="9" y="9" width="11" height="11" rx="2"></rect>
-        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-      </svg>
-    `;
-  } else if (icon === "upload") {
-    iconElement.innerHTML = `
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 3v12"></path>
-        <path d="m7 8 5-5 5 5"></path>
-        <path d="M5 21h14"></path>
-      </svg>
-    `;
-  } else {
-    iconElement.textContent = icon;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  for (const [name, value] of Object.entries({
+    width: 16,
+    height: 16,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    "stroke-width": 2,
+    "stroke-linecap": "round",
+    "stroke-linejoin": "round",
+    "aria-hidden": "true",
+  })) {
+    svg.setAttribute(name, String(value));
   }
-  button.append(iconElement, document.createTextNode(text));
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", COPY_ICONS[icon] || COPY_ICONS.copy);
+  svg.appendChild(path);
+  const label = document.createElement("span");
+  label.textContent = text;
+  button.append(svg, label);
 }
 
 function syncEditActionState() {
@@ -1833,6 +1859,8 @@ function syncEditActionState() {
   undo.disabled = editor.undoStack.length === 0;
   redo.disabled = editor.redoStack.length === 0;
   clear.disabled = editor.operations.length === 0;
+  syncMeta();
+  renderAnnotationList();
 }
 
 function beginStyleEdit() {
@@ -1868,43 +1896,105 @@ function styleControlTool() {
   return editor.operations[editor.selectedIndex]?.type || editor.currentTool;
 }
 
-function syncStrokeValueLabel() {
-  const stroke = document.getElementById("stroke");
-  const strokeValue = document.getElementById("strokeValue");
-  if (!stroke || !strokeValue) return;
+// The right panel shows only what the current tool (or, in Select, the
+// selected annotation) uses. Its header always names the tool.
+function syncStyleControlVisibility() {
+  const header = TOOLS[editor.currentTool];
+  if (!header || !document.getElementById("toolName")) return;
+  document.getElementById("toolName").textContent = header.label;
+  document.getElementById("toolKey").textContent = header.key;
+  document.getElementById("toolHint").textContent = header.hint;
 
-  const rawValue = Number(stroke.value);
-  const tool = styleControlTool();
-  const value = tool === "pixelate" ? Math.max(6, rawValue * 4) : rawValue;
-  strokeValue.textContent = `${value} px`;
+  const tool = editor.currentTool;
+  const group = toolGroup(styleControlTool());
+  const show = {
+    colorSection: ["arrow", "rect", "text", "step", "pen"].includes(group),
+    thicknessSection: ["arrow", "rect", "pen"].includes(group),
+    textSection: group === "text",
+    stepSection: group === "step",
+    hideSection: group === "hide",
+    cropSection: tool === "crop",
+    layersSection: tool === "select",
+  };
+  for (const [id, visible] of Object.entries(show)) document.getElementById(id).hidden = !visible;
+  syncStyleControls();
+  syncCropControls();
+  renderAnnotationList();
 }
 
-function syncStyleControlVisibility() {
-  const colorControl = document.getElementById("colorControl");
-  const colorSwatches = document.getElementById("colorSwatches");
-  const strokeControl = document.getElementById("strokeControl");
-  const strokeLabel = document.getElementById("strokeLabel");
-  const textSizeControl = document.getElementById("textSizeControl");
-  if (!colorControl || !strokeControl || !textSizeControl) return;
-
-  const tool = styleControlTool();
-  const showColor = ["arrow", "rect", "pen", "text", "step"].includes(tool);
-  const showStroke = ["arrow", "rect", "pen", "pixelate", "blur"].includes(tool);
-  const showTextSize = ["text", "step"].includes(tool);
-
-  colorControl.hidden = !showColor;
-  if (colorSwatches) colorSwatches.hidden = !showColor;
-  strokeControl.hidden = !showStroke;
-  textSizeControl.hidden = !showTextSize;
-  if (strokeLabel) {
-    strokeLabel.textContent =
-      tool === "pixelate" ? "Block size" : tool === "blur" ? "Blur" : "Stroke";
+// Name and kind for the Select tool's list.
+function annotationLabel(operation) {
+  const hidden = { blur: "Blur", pixelate: "Pixelate", redact: "Redact" };
+  if (hidden[operation.type]) return { name: "Hidden area", kind: hidden[operation.type], color: "#8A8A8A" };
+  if (operation.type === "arrow") return { name: "Arrow", kind: "Pointer", color: operation.color };
+  if (operation.type === "rect") return { name: "Box", kind: "Outline", color: operation.color };
+  if (operation.type === "pen") return { name: "Drawing", kind: "Pen", color: operation.color };
+  if (operation.type === "step") return { name: `Step ${operation.number}`, kind: "Step", color: operation.color };
+  if (operation.type === "text") {
+    const text = operation.text.replace(/\s+/g, " ").trim();
+    return { name: text.length > 24 ? `${text.slice(0, 23)}…` : text, kind: "Text", color: operation.color };
   }
-  syncStrokeValueLabel();
+  return { name: operation.type, kind: "", color: operation.color };
+}
+
+const TRASH_PATH = "M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3";
+
+// Every annotation on the screenshot, in the order it was added. A row
+// selects its annotation; the bin deletes it. The handlers live in
+// setupAnnotationControls, which sets editor.listActions.
+function renderAnnotationList() {
+  const list = document.getElementById("layerList");
+  if (!list || document.getElementById("layersSection").hidden) return;
+  list.textContent = "";
+  document.getElementById("layersEmpty").hidden = editor.operations.length > 0;
+  editor.operations.forEach((operation, index) => {
+    const label = annotationLabel(operation);
+    const row = document.createElement("div");
+    row.className = "layer";
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(index === editor.selectedIndex));
+    const pick = document.createElement("button");
+    pick.type = "button";
+    pick.className = "layer-pick";
+    const dot = document.createElement("span");
+    dot.className = "layer-dot";
+    dot.style.background = label.color;
+    const name = document.createElement("span");
+    name.className = "layer-name";
+    name.textContent = label.name;
+    const kind = document.createElement("span");
+    kind.className = "layer-kind";
+    kind.textContent = label.kind;
+    pick.append(dot, name, kind);
+    pick.addEventListener("click", () => editor.listActions?.select(index));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "layer-delete";
+    remove.title = `Delete ${label.name}`;
+    remove.setAttribute("aria-label", `Delete ${label.name}`);
+    remove.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${TRASH_PATH}"></path></svg>`;
+    remove.addEventListener("click", () => editor.listActions?.remove(index));
+    row.append(pick, remove);
+    list.appendChild(row);
+  });
+}
+
+function syncCropControls() {
+  setChecked("[data-crop-aspect]", "cropAspect", editor.cropAspect);
+  const apply = document.getElementById("applyCrop");
+  if (!apply || !editor.baseCanvas) return;
+  const rect = editor.cropDraft;
+  const whole =
+    !rect ||
+    (Math.round(rect.x) <= 0 &&
+      Math.round(rect.y) <= 0 &&
+      Math.round(rect.width) >= editor.baseCanvas.width &&
+      Math.round(rect.height) >= editor.baseCanvas.height);
+  apply.disabled = whole;
 }
 
 function clampZoom(value) {
-  return Math.min(4, Math.max(0.08, value));
+  return Math.min(4, Math.max(0.02, value));
 }
 
 function layoutCssBackground(background) {
@@ -1994,25 +2084,40 @@ function updateChromePreview() {
   stamp.textContent = text;
 }
 
-function fitZoom() {
-  const stage = document.querySelector(".stage");
-  if (!stage || !editor.canvas) return 1;
-
+function stageInnerSize() {
+  const stage = document.getElementById("stage");
   const style = getComputedStyle(stage);
-  const horizontalPadding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-  const available = Math.max(120, stage.clientWidth - horizontalPadding);
-  const layoutWidth = editor.layout.enabled ? editor.layout.padding * 2 : 0;
-  return clampZoom(Math.min(1, available / (editor.baseCanvas.width + layoutWidth)));
+  return {
+    width: Math.max(120, stage.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)),
+    height: Math.max(120, stage.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)),
+  };
 }
 
-function zoomLabel(value, mode = editor.zoomMode) {
-  if (mode === "fit") return "Fit";
-  return `${Math.round(value * 100)}%`;
+// Fit width: the screenshot as wide as the canvas area, never past 100%.
+function fitZoom() {
+  if (!editor.canvas) return 1;
+  const { width } = stageInnerSize();
+  const layoutWidth = editor.layout.enabled ? editor.layout.padding * 2 : 0;
+  return clampZoom(Math.min(1, width / (editor.baseCanvas.width + layoutWidth)));
 }
+
+// Fit page: the whole screenshot, top to bottom, in view.
+function fitPageZoom() {
+  if (!editor.canvas) return 1;
+  const { width, height } = stageInnerSize();
+  const notices = document.getElementById("notices");
+  const available = height - (notices.offsetHeight ? notices.offsetHeight + 16 : 0);
+  const pad = editor.layout.enabled ? editor.layout.padding * 2 : 0;
+  const bar = editor.layout.enabled && FRAME_THEMES[editor.layout.frame] ? 40 * chromeScale(editor.baseCanvas.width) : 0;
+  return clampZoom(
+    Math.min(1, width / (editor.baseCanvas.width + pad), Math.max(1, available) / (editor.baseCanvas.height + pad + bar))
+  );
+}
+
+const ZOOM_MODES = { fit: "Fit width", page: "Fit page" };
 
 function applyZoom(value, mode = "custom") {
   if (!editor.canvas) return;
-
   const next = clampZoom(value);
   editor.zoom = next;
   editor.zoomMode = mode;
@@ -2020,30 +2125,139 @@ function applyZoom(value, mode = "custom") {
   setCanvasCssWidth(editor.baseDisplayCanvas, displayWidth);
   setCanvasCssWidth(editor.canvas, displayWidth);
   applyLayoutPreview();
-
   const zoomValue = document.getElementById("zoomValue");
-  if (zoomValue) zoomValue.textContent = zoomLabel(next, mode);
-  requestAnimationFrame(syncMiniToolbar);
+  if (zoomValue) zoomValue.textContent = ZOOM_MODES[mode] || "Zoom";
+  const zoomPercent = document.getElementById("zoomPercent");
+  if (zoomPercent) zoomPercent.textContent = `${Math.round(next * 100)}%`;
+  requestAnimationFrame(() => {
+    redraw();
+    syncNavigator();
+  });
 }
 
+// One Zoom menu: fit width, fit page, actual size, in and out.
 function setupZoomControls() {
   const controls = document.getElementById("zoomControls");
-  const zoomOut = document.getElementById("zoomOut");
-  const zoomIn = document.getElementById("zoomIn");
-  const zoomFit = document.getElementById("zoomFit");
-  const zoomActual = document.getElementById("zoomActual");
-  if (!controls || !zoomOut || !zoomIn || !zoomFit || !zoomActual) return;
-
+  const button = document.getElementById("zoomButton");
+  const menu = document.getElementById("zoomMenu");
+  if (!controls || !button || !menu) return;
   controls.hidden = false;
-  zoomOut.addEventListener("click", () => applyZoom(editor.zoom / 1.2));
-  zoomIn.addEventListener("click", () => applyZoom(editor.zoom * 1.2));
-  zoomFit.addEventListener("click", () => applyZoom(fitZoom(), "fit"));
-  zoomActual.addEventListener("click", () => applyZoom(1, "actual"));
+  const setOpen = setupMenu(button, menu, controls);
+  const actions = {
+    width: () => applyZoom(fitZoom(), "fit"),
+    page: () => applyZoom(fitPageZoom(), "page"),
+    actual: () => applyZoom(1, "actual"),
+    in: () => applyZoom(editor.zoom * 1.2),
+    out: () => applyZoom(editor.zoom / 1.2),
+  };
+  for (const item of menu.querySelectorAll("[data-zoom]")) {
+    item.addEventListener("click", () => {
+      actions[item.dataset.zoom]();
+      // Zooming in steps keeps the menu open for the next step.
+      if (item.dataset.zoom !== "in" && item.dataset.zoom !== "out") setOpen(false);
+    });
+  }
   window.addEventListener("resize", () => {
     if (editor.zoomMode === "fit") applyZoom(fitZoom(), "fit");
+    else if (editor.zoomMode === "page") applyZoom(fitPageZoom(), "page");
+    else syncNavigator();
   });
-
   requestAnimationFrame(() => applyZoom(fitZoom(), "fit"));
+}
+
+/* --------------------------- page navigator ---------------------------- */
+
+const NAV_WIDTH = 40;
+
+// A thin map of the whole screenshot at the canvas's right edge, with a box
+// for the part in view. Shown only when the screenshot is taller than the
+// canvas area; its column keeps its width either way so nothing shifts.
+function syncNavigator() {
+  const nav = document.getElementById("pageNav");
+  const stage = document.getElementById("stage");
+  if (!nav || !stage || !editor.canvas || !editor.baseCanvas) return;
+  const canvasRect = editor.canvas.getBoundingClientRect();
+  const stageRect = stage.getBoundingClientRect();
+  const scrolls = stage.scrollHeight > stage.clientHeight + 1;
+  nav.classList.toggle("idle", !scrolls || !canvasRect.height);
+  if (!scrolls || !canvasRect.height) return;
+
+  const map = document.getElementById("navMap");
+  const { width, height } = editor.baseCanvas;
+  const maxHeight = Math.max(80, nav.clientHeight - 36 - 60);
+  let mapHeight = Math.round((NAV_WIDTH * height) / width);
+  let mapWidth = NAV_WIDTH;
+  if (mapHeight > maxHeight) {
+    mapHeight = maxHeight;
+    mapWidth = Math.max(8, Math.round((maxHeight * width) / height));
+  }
+  if (map.style.width !== `${mapWidth}px` || map.style.height !== `${mapHeight}px`) {
+    map.style.width = `${mapWidth}px`;
+    map.style.height = `${mapHeight}px`;
+    renderNavigator();
+  }
+
+  const top = Math.max(0, Math.min(1, (stageRect.top - canvasRect.top) / canvasRect.height));
+  const bottom = Math.max(top, Math.min(1, (stageRect.bottom - canvasRect.top) / canvasRect.height));
+  const box = document.getElementById("navBox");
+  box.style.top = `${top * mapHeight}px`;
+  box.style.height = `${Math.max(6, (bottom - top) * mapHeight)}px`;
+
+  const screens = Math.max(1, Math.ceil(canvasRect.height / stage.clientHeight));
+  const current = Math.min(screens, Math.floor(top * screens + 0.001) + 1);
+  const label = document.getElementById("navLabel");
+  label.textContent = "";
+  label.append(`${current} / ${screens}`, document.createElement("br"), "screens");
+}
+
+// Draws the screenshot and its annotations into the map.
+function renderNavigator() {
+  const map = document.getElementById("navMap");
+  const canvas = document.getElementById("navCanvas");
+  if (!map || !canvas || !editor.baseDisplayCanvas || !map.style.width) return;
+  const dpr = window.devicePixelRatio || 1;
+  const width = parseFloat(map.style.width);
+  const height = parseFloat(map.style.height);
+  canvas.width = Math.round(width * dpr);
+  canvas.height = Math.round(height * dpr);
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(editor.baseDisplayCanvas, 0, 0, canvas.width, canvas.height);
+  ctx.drawImage(editor.canvas, 0, 0, canvas.width, canvas.height);
+}
+
+// Redraws come in bursts while drawing; the map catches up once they stop.
+function scheduleNavigatorRender() {
+  clearTimeout(editor.navigatorTimer);
+  editor.navigatorTimer = setTimeout(() => {
+    if (!document.getElementById("pageNav")?.classList.contains("idle")) renderNavigator();
+  }, 250);
+}
+
+function setupNavigator() {
+  const stage = document.getElementById("stage");
+  const map = document.getElementById("navMap");
+  if (!stage || !map) return;
+  // Scroll so the point under the pointer is centred in the canvas area.
+  const jump = (event) => {
+    const mapRect = map.getBoundingClientRect();
+    const fraction = Math.max(0, Math.min(1, (event.clientY - mapRect.top) / mapRect.height));
+    const canvasRect = editor.canvas.getBoundingClientRect();
+    const stageRect = stage.getBoundingClientRect();
+    const target = canvasRect.top + fraction * canvasRect.height;
+    stage.scrollTop += target - (stageRect.top + stageRect.height / 2);
+  };
+  map.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    map.setPointerCapture(event.pointerId);
+    jump(event);
+  });
+  map.addEventListener("pointermove", (event) => {
+    if (map.hasPointerCapture(event.pointerId)) jump(event);
+  });
+  stage.addEventListener("scroll", () => syncNavigator(), { passive: true });
 }
 
 function loadProjectState(project) {
@@ -2345,29 +2559,23 @@ async function saveEditorDefaults(patch) {
   await chrome.storage.local.set({ settings: { ...settings, editorDefaults } });
 }
 
-// JPEG quality lives behind the pencil next to "Smaller file", and is
-// remembered for next time.
+// JPG quality is a slider on the JPG row of the Export menu. Moving it keeps
+// the menu open and downloads nothing; it is remembered for next time.
 function setupJpegQuality(baseName) {
   const input = document.getElementById("jpegQuality");
   const label = document.getElementById("jpegQualityValue");
-  const edit = document.getElementById("qualityEdit");
-  const row = document.getElementById("qualityRow");
   if (!input) return;
   input.value = String(Math.round(editor.jpegQuality * 100));
   label.textContent = input.value;
-  edit.addEventListener("click", () => {
-    row.hidden = !row.hidden;
-    edit.setAttribute("aria-expanded", String(!row.hidden));
-    if (!row.hidden) input.focus();
-  });
+  input.addEventListener("click", (event) => event.stopPropagation());
   input.addEventListener("input", () => {
     label.textContent = input.value;
   });
   input.addEventListener("change", async () => {
     editor.jpegQuality = Number(input.value) / 100;
     syncJpegLabel();
-    await saveEditorDefaults({ jpegQuality: editor.jpegQuality });
     scheduleExportRefresh(baseName);
+    await saveEditorDefaults({ jpegQuality: editor.jpegQuality });
   });
 }
 
@@ -2382,7 +2590,6 @@ function setupDownloadActions(baseName) {
       await ensureFreshExports(baseName);
       anchor.click();
     });
-    anchor.addEventListener("click", () => pulseFeedback(anchor));
   }
 }
 
@@ -2392,58 +2599,64 @@ function syncLayoutControlValues() {
   const background = document.getElementById("layoutBackground");
   const aspect = document.getElementById("layoutAspect");
   const padding = document.getElementById("layoutPadding");
-  const paddingValue = document.getElementById("layoutPaddingValue");
   const radius = document.getElementById("layoutRadius");
-  const radiusValue = document.getElementById("layoutRadiusValue");
   const shadow = document.getElementById("layoutShadow");
-  const shadowValue = document.getElementById("layoutShadowValue");
   if (!enabled || !background || !aspect || !padding || !radius || !shadow) return;
 
   enabled.checked = Boolean(editor.layout.enabled);
   if (controls) controls.hidden = !enabled.checked;
+  document.getElementById("frameDot").hidden = !enabled.checked;
   document.getElementById("layoutFrame").value = editor.layout.frame || "none";
   document.getElementById("layoutFrameAddress").checked = editor.layout.frameAddress !== false;
   document.getElementById("layoutStamp").value = editor.layout.stamp || "none";
   document.getElementById("layoutStampUrl").checked = !!editor.layout.stampUrl;
-  syncPickers();
   background.value = editor.layout.background;
   aspect.value = editor.layout.aspect;
   padding.value = String(editor.layout.padding);
   radius.value = String(editor.layout.radius);
   shadow.value = String(editor.layout.shadow);
-  if (paddingValue) paddingValue.textContent = `${editor.layout.padding} px`;
-  if (radiusValue) radiusValue.textContent = `${editor.layout.radius} px`;
-  if (shadowValue) shadowValue.textContent = `${editor.layout.shadow} px`;
+  syncPickers();
+  syncLayoutValues();
 }
 
-// The frame chips and stamp buttons stand in for hidden selects, which stay
-// the source of truth for refreshLayout.
+function syncLayoutValues() {
+  document.getElementById("layoutPaddingValue").textContent = String(editor.layout.padding);
+  document.getElementById("layoutRadiusValue").textContent = String(editor.layout.radius);
+  document.getElementById("layoutShadowValue").textContent = String(editor.layout.shadow);
+}
+
+// The swatches, window chips and segmented buttons stand in for hidden
+// selects, which stay the source of truth for refreshLayout.
+const LAYOUT_PICKERS = [
+  { selector: "[data-background]", attribute: "background", select: "layoutBackground" },
+  { selector: "[data-frame]", attribute: "frame", select: "layoutFrame" },
+  { selector: "[data-aspect]", attribute: "aspect", select: "layoutAspect" },
+  { selector: "[data-stamp]", attribute: "stamp", select: "layoutStamp" },
+];
+
 function syncPickers() {
+  for (const picker of LAYOUT_PICKERS) {
+    setChecked(picker.selector, picker.attribute, document.getElementById(picker.select).value);
+  }
   const frame = document.getElementById("layoutFrame").value;
-  for (const chip of document.querySelectorAll("[data-frame]")) {
-    chip.setAttribute("aria-checked", String(chip.dataset.frame === frame));
-  }
   const stamp = document.getElementById("layoutStamp").value;
-  for (const button of document.querySelectorAll("[data-stamp]")) {
-    button.setAttribute("aria-checked", String(button.dataset.stamp === stamp));
-  }
   document.getElementById("layoutFrameAddress").closest("label").hidden = frame === "none";
   document.getElementById("layoutStampUrl").closest("label").hidden = stamp === "none";
 }
 
 function setupPickers() {
-  const pick = (select, value) => {
-    select.value = value;
-    select.dispatchEvent(new Event("change"));
-    syncPickers();
-  };
-  const frame = document.getElementById("layoutFrame");
-  const stamp = document.getElementById("layoutStamp");
-  for (const chip of document.querySelectorAll("[data-frame]")) {
-    chip.addEventListener("click", () => pick(frame, chip.dataset.frame));
+  for (const swatch of document.querySelectorAll("[data-background]")) {
+    swatch.style.background = layoutCssBackground(swatch.dataset.background);
   }
-  for (const button of document.querySelectorAll("[data-stamp]")) {
-    button.addEventListener("click", () => pick(stamp, button.dataset.stamp));
+  for (const picker of LAYOUT_PICKERS) {
+    const select = document.getElementById(picker.select);
+    for (const button of document.querySelectorAll(picker.selector)) {
+      button.addEventListener("click", () => {
+        select.value = button.dataset[picker.attribute];
+        select.dispatchEvent(new Event("change"));
+        syncPickers();
+      });
+    }
   }
 }
 
@@ -2453,11 +2666,8 @@ function setupLayoutControls(baseName) {
   const background = document.getElementById("layoutBackground");
   const aspect = document.getElementById("layoutAspect");
   const padding = document.getElementById("layoutPadding");
-  const paddingValue = document.getElementById("layoutPaddingValue");
   const radius = document.getElementById("layoutRadius");
-  const radiusValue = document.getElementById("layoutRadiusValue");
   const shadow = document.getElementById("layoutShadow");
-  const shadowValue = document.getElementById("layoutShadowValue");
   if (!enabled || !background || !aspect || !padding || !radius || !shadow) return;
 
   const frame = document.getElementById("layoutFrame");
@@ -2480,16 +2690,19 @@ function setupLayoutControls(baseName) {
       stampUrl: stampUrl.checked,
     };
     if (controls) controls.hidden = !editor.layout.enabled;
-    if (paddingValue) paddingValue.textContent = `${editor.layout.padding} px`;
-    if (radiusValue) radiusValue.textContent = `${editor.layout.radius} px`;
-    if (shadowValue) shadowValue.textContent = `${editor.layout.shadow} px`;
+    document.getElementById("frameDot").hidden = !editor.layout.enabled;
+    syncLayoutValues();
     applyLayoutPreview();
+    syncNavigator();
     scheduleExportRefresh(baseName);
   }
 
   syncLayoutControlValues();
   setupPickers();
-  for (const control of [frame, frameAddress, stamp, stampUrl]) control.addEventListener("change", refreshLayout);
+  for (const control of [enabled, background, aspect, frame, frameAddress, stamp, stampUrl]) {
+    control.addEventListener("change", refreshLayout);
+  }
+  for (const control of [padding, radius, shadow]) control.addEventListener("input", refreshLayout);
   saveDefault.addEventListener("click", async () => {
     await saveEditorDefaults({ layout: cloneLayout() });
     saveDefault.textContent = "Saved for new screenshots";
@@ -2497,132 +2710,233 @@ function setupLayoutControls(baseName) {
       saveDefault.textContent = "Save as default";
     }, 1600);
   });
-  enabled.addEventListener("change", refreshLayout);
-  background.addEventListener("change", refreshLayout);
-  aspect.addEventListener("change", refreshLayout);
-  padding.addEventListener("input", refreshLayout);
-  radius.addEventListener("input", refreshLayout);
-  shadow.addEventListener("input", refreshLayout);
+}
+
+// Annotate and Frame share the panel; picking a tool returns to Annotate.
+function showPanelTab(name) {
+  for (const tab of document.querySelectorAll("[data-tab]")) {
+    tab.setAttribute("aria-selected", String(tab.dataset.tab === name));
+  }
+  document.getElementById("annotatePane").hidden = name !== "annotate";
+  document.getElementById("framePane").hidden = name !== "frame";
+}
+
+function setupPanelTabs() {
+  for (const tab of document.querySelectorAll("[data-tab]")) {
+    tab.addEventListener("click", () => showPanelTab(tab.dataset.tab));
+  }
 }
 
 function setupAnnotationControls(baseName) {
   const toolButtons = Array.from(document.querySelectorAll("[data-tool]"));
-  const miniColorButtons = Array.from(document.querySelectorAll("[data-mini-color]"));
-  const toolHint = document.getElementById("toolHint");
-  const color = document.getElementById("color");
-  const swatches = Array.from(document.querySelectorAll("[data-color]"));
-  const stroke = document.getElementById("stroke");
-  const strokeValue = document.getElementById("strokeValue");
-  const textSize = document.getElementById("textSize");
-  const textSizeValue = document.getElementById("textSizeValue");
   editor.canvas.dataset.currentTool = editor.currentTool;
-
-  function syncToolSurface() {
-    if (toolHint) toolHint.textContent = toolHints[editor.currentTool];
-  }
 
   function selectTool(tool) {
     const button = toolButtons.find((item) => item.dataset.tool === tool);
-    if (!button) return;
+    if (!button || button.hidden) return;
 
     finalizeStyleEdit();
     if (editor.activeTextInput) editor.activeTextInput.finish(true);
+    if (tool === "crop" && editor.currentTool !== "crop") {
+      editor.toolBeforeCrop = editor.currentTool;
+      editor.cropDraft = fullImageRect();
+    }
+    if (tool !== "crop") editor.cropDraft = null;
+    // Select keeps what was just drawn selected, so it can be adjusted.
+    if (tool !== "select") editor.selectedIndex = -1;
     editor.currentTool = tool;
-    editor.selectedIndex = -1;
-    editor.canvas.dataset.currentTool = editor.currentTool;
-    if (tool === "redact") setCurrentColor("#111111");
-    toolButtons.forEach((item) => item.classList.toggle("active", item === button));
-    pulseFeedback(button);
-    syncToolSurface();
+    editor.canvas.dataset.currentTool = tool;
+    editor.canvas.style.cursor = "";
+    toolButtons.forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+    showPanelTab("annotate");
     redraw();
     syncStyleControlVisibility();
-    renderStylePreview();
   }
 
   toolButtons.forEach((button) => {
     button.addEventListener("click", () => selectTool(button.dataset.tool));
   });
 
-  function syncSwatches() {
-    syncSwatchesForColor();
-  }
-
-  function loadSelectedStyle(operation) {
-    loadOperationStyle(operation);
-  }
+  /* ------------------------------ style ------------------------------ */
 
   function updateSelectedStyle() {
-    if (editor.selectedIndex < 0) return;
     const operation = editor.operations[editor.selectedIndex];
     if (!operation) return;
 
-    const style = currentStyle();
-    if (["arrow", "rect", "pen", "text", "step"].includes(operation.type)) {
-      operation.color = style.color;
+    const style = editor.style;
+    const group = toolGroup(operation.type);
+    if (["arrow", "rect", "pen", "text", "step"].includes(group)) operation.color = style.color;
+    if (["arrow", "rect", "pen"].includes(group)) operation.strokeWidth = style.strokeWidth;
+    if (group === "text") {
+      operation.textSize = style.textSize;
+      operation.background = !!style.textBackground;
     }
-    if (["arrow", "rect", "pen", "pixelate", "blur"].includes(operation.type)) {
-      operation.strokeWidth = style.strokeWidth;
+    if (group === "hide") {
+      operation.type = editor.hideMethod;
+      if (operation.type === "redact") operation.color = "#111111";
+      else operation.strokeWidth = style.strength;
     }
-    if (["text", "step"].includes(operation.type)) operation.textSize = style.textSize;
-    if (operation.type === "step") operation.radius = Math.max(36, style.textSize * 1.24);
     redraw();
     scheduleExportRefresh(baseName);
   }
 
-  function applyColor(value) {
-    beginStyleEdit();
-    setCurrentColor(value);
-    if (editor.activeTextInput) editor.activeTextInput.syncStyle();
-    updateSelectedStyle();
-    finalizeStyleEdit();
-    renderStylePreview();
+  // The annotation style carries over to the next screenshot.
+  function persistStyle() {
+    saveEditorDefaults({ style: { ...editor.style, hideMethod: editor.hideMethod } }).catch(() => {});
   }
 
-  miniColorButtons.forEach((button) => {
-    button.addEventListener("click", () => applyColor(button.dataset.miniColor));
-  });
+  // A style change applies to the selected annotation too. Sliders commit
+  // once, when released, so a drag is one undo step.
+  function changeStyle(patch, { commit = true } = {}) {
+    beginStyleEdit();
+    Object.assign(editor.style, patch);
+    if (editor.activeTextInput) editor.activeTextInput.syncStyle();
+    updateSelectedStyle();
+    syncStyleControls();
+    if (commit) {
+      finalizeStyleEdit();
+      persistStyle();
+    }
+  }
 
-  swatches.forEach((swatch) => {
-    swatch.addEventListener("click", () => {
+  for (const swatch of document.querySelectorAll("[data-color]")) {
+    swatch.addEventListener("click", () => changeStyle({ color: swatch.dataset.color }));
+  }
+  for (const button of document.querySelectorAll("[data-thickness]")) {
+    button.addEventListener("click", () => changeStyle({ strokeWidth: THICKNESS[button.dataset.thickness] }));
+  }
+  for (const button of document.querySelectorAll("[data-text-size]")) {
+    button.addEventListener("click", () => changeStyle({ textSize: TEXT_SIZES[button.dataset.textSize] }));
+  }
+  const textBackground = document.getElementById("textBackground");
+  textBackground.addEventListener("change", () => changeStyle({ textBackground: textBackground.checked }));
+  for (const button of document.querySelectorAll("[data-hide-method]")) {
+    button.addEventListener("click", () => {
       beginStyleEdit();
-      color.value = swatch.dataset.color;
-      syncSwatches();
-      syncColorButtons(color.value);
-      if (editor.activeTextInput) editor.activeTextInput.syncStyle();
+      editor.hideMethod = button.dataset.hideMethod;
       updateSelectedStyle();
       finalizeStyleEdit();
-      renderStylePreview();
+      syncStyleControls();
+      persistStyle();
     });
+  }
+  const strength = document.getElementById("strength");
+  strength.addEventListener("input", () => changeStyle({ strength: Number(strength.value) }, { commit: false }));
+  strength.addEventListener("change", () => {
+    finalizeStyleEdit();
+    persistStyle();
   });
-  color.addEventListener("input", () => {
-    beginStyleEdit();
-    syncSwatches();
-    syncColorButtons(color.value);
-    if (editor.activeTextInput) editor.activeTextInput.syncStyle();
-    updateSelectedStyle();
-    renderStylePreview();
+  document.getElementById("restartSteps").addEventListener("click", () => {
+    editor.stepRestartId = editor.nextOperationId;
+    syncStyleControls();
   });
-  color.addEventListener("change", finalizeStyleEdit);
-  color.addEventListener("blur", finalizeStyleEdit);
 
-  stroke.addEventListener("input", () => {
-    beginStyleEdit();
-    syncStrokeValueLabel();
-    if (editor.activeTextInput) editor.activeTextInput.syncStyle();
-    updateSelectedStyle();
-    renderStylePreview();
-  });
-  stroke.addEventListener("change", finalizeStyleEdit);
-  stroke.addEventListener("blur", finalizeStyleEdit);
-  textSize.addEventListener("input", () => {
-    beginStyleEdit();
-    textSizeValue.textContent = `${textSize.value} px`;
-    if (editor.activeTextInput) editor.activeTextInput.syncStyle();
-    updateSelectedStyle();
-    renderStylePreview();
-  });
-  textSize.addEventListener("change", finalizeStyleEdit);
-  textSize.addEventListener("blur", finalizeStyleEdit);
+  /* ------------------------------- crop ------------------------------ */
+
+  function fullImageRect() {
+    return { x: 0, y: 0, width: editor.baseCanvas.width, height: editor.baseCanvas.height };
+  }
+
+  // `start` with `edge` dragged to `point`: inside the image, at least 8px,
+  // and at the chosen aspect, growing away from the side that stays put.
+  function resizeCrop(start, edge, point) {
+    const W = editor.baseCanvas.width;
+    const H = editor.baseCanvas.height;
+    const px = Math.max(0, Math.min(W, point.x));
+    const py = Math.max(0, Math.min(H, point.y));
+    let left = start.x;
+    let top = start.y;
+    let right = start.x + start.width;
+    let bottom = start.y + start.height;
+    if (edge.includes("w")) left = Math.min(px, right - 8);
+    if (edge.includes("e")) right = Math.max(px, left + 8);
+    if (edge.includes("n")) top = Math.min(py, bottom - 8);
+    if (edge.includes("s")) bottom = Math.max(py, top + 8);
+    const ratio = CROP_ASPECTS[editor.cropAspect];
+    if (!ratio) return { x: left, y: top, width: right - left, height: bottom - top };
+
+    const anchorX = edge.includes("w") ? right : edge.includes("e") ? left : start.x + start.width / 2;
+    const anchorY = edge.includes("n") ? bottom : edge.includes("s") ? top : start.y + start.height / 2;
+    let w = right - left;
+    let h = bottom - top;
+    if (edge === "n" || edge === "s") w = h * ratio;
+    else h = w / ratio;
+    const maxW = edge.includes("w") ? anchorX : edge.includes("e") ? W - anchorX : 2 * Math.min(anchorX, W - anchorX);
+    const maxH = edge.includes("n") ? anchorY : edge.includes("s") ? H - anchorY : 2 * Math.min(anchorY, H - anchorY);
+    const scale = Math.min(1, maxW / w, maxH / h);
+    w *= scale;
+    h *= scale;
+    return {
+      x: edge.includes("w") ? anchorX - w : edge.includes("e") ? anchorX : anchorX - w / 2,
+      y: edge.includes("n") ? anchorY - h : edge.includes("s") ? anchorY : anchorY - h / 2,
+      width: w,
+      height: h,
+    };
+  }
+
+  // The edge or corner of the pending crop under `point`, if any.
+  function cropEdgeAt(point) {
+    const rect = editor.cropDraft;
+    if (!rect) return null;
+    const tolerance = 10 * cssPixel();
+    const handle = cropHandles(rect).find(
+      (item) => Math.abs(item.x - point.x) <= tolerance && Math.abs(item.y - point.y) <= tolerance
+    );
+    if (handle) return handle.edge;
+    const withinX = point.x >= rect.x - tolerance && point.x <= rect.x + rect.width + tolerance;
+    const withinY = point.y >= rect.y - tolerance && point.y <= rect.y + rect.height + tolerance;
+    if (withinY && Math.abs(point.x - rect.x) <= tolerance) return "w";
+    if (withinY && Math.abs(point.x - (rect.x + rect.width)) <= tolerance) return "e";
+    if (withinX && Math.abs(point.y - rect.y) <= tolerance) return "n";
+    if (withinX && Math.abs(point.y - (rect.y + rect.height)) <= tolerance) return "s";
+    return null;
+  }
+
+  const EDGE_CURSORS = { n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize", nw: "nwse-resize", se: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize" };
+
+  // Choosing an aspect reshapes the pending crop to the largest area of that
+  // shape inside it.
+  function setCropAspect(name) {
+    editor.cropAspect = name;
+    const ratio = CROP_ASPECTS[name];
+    const rect = editor.cropDraft;
+    if (ratio && rect) {
+      let width = rect.width;
+      let height = width / ratio;
+      if (height > rect.height) {
+        height = rect.height;
+        width = height * ratio;
+      }
+      editor.cropDraft = {
+        x: rect.x + (rect.width - width) / 2,
+        y: rect.y + (rect.height - height) / 2,
+        width,
+        height,
+      };
+    }
+    redraw();
+    syncCropControls();
+  }
+
+  function applyCrop() {
+    if (!editor.cropDraft || document.getElementById("applyCrop").disabled) return;
+    cropToRect(editor.cropDraft, baseName);
+    editor.cropDraft = null;
+    selectTool(editor.toolBeforeCrop || "arrow");
+  }
+
+  function cancelCrop() {
+    editor.cropDraft = null;
+    selectTool(editor.toolBeforeCrop || "arrow");
+  }
+
+  for (const button of document.querySelectorAll("[data-crop-aspect]")) {
+    button.addEventListener("click", () => setCropAspect(button.dataset.cropAspect));
+  }
+  document.getElementById("applyCrop").addEventListener("click", applyCrop);
+  document.getElementById("cancelCrop").addEventListener("click", cancelCrop);
+
+  /* --------------------------- edit actions -------------------------- */
 
   function undoOperation() {
     finalizeStyleEdit();
@@ -2656,15 +2970,13 @@ function setupAnnotationControls(baseName) {
     redraw();
     syncEditActionState();
     syncStyleControlVisibility();
-    renderStylePreview();
     scheduleExportRefresh(baseName);
   }
 
-  function deleteSelectedOperation() {
+  function deleteOperationAt(index) {
     finalizeStyleEdit();
-    if (editor.selectedIndex < 0) return;
+    if (index < 0 || index >= editor.operations.length) return;
     if (editor.activeTextInput) editor.activeTextInput.finish(false);
-    const index = editor.selectedIndex;
     const operation = cloneOperation(editor.operations[index]);
     editor.operations.splice(index, 1);
     editor.selectedIndex = -1;
@@ -2672,25 +2984,39 @@ function setupAnnotationControls(baseName) {
     redraw();
     syncEditActionState();
     syncStyleControlVisibility();
-    renderStylePreview();
     scheduleExportRefresh(baseName);
   }
 
-  function duplicateSelectedOperation() {
-    finalizeStyleEdit();
-    const operation = editor.operations[editor.selectedIndex];
-    if (!operation) return;
-    const duplicate = cloneOperation(operation);
-    delete duplicate.id;
-    moveOperation(duplicate, 24, 24);
-    pushOperation(duplicate, baseName);
+  // Brings an annotation picked from the list into view.
+  function scrollOperationIntoView(operation) {
+    const stage = document.getElementById("stage");
+    const bounds = operationBounds(operation);
+    const canvasRect = editor.canvas.getBoundingClientRect();
+    const stageRect = stage.getBoundingClientRect();
+    const scale = canvasRect.height / editor.baseCanvas.height;
+    const top = canvasRect.top + bounds.y * scale;
+    const bottom = top + bounds.height * scale;
+    if (top >= stageRect.top && bottom <= stageRect.bottom) return;
+    stage.scrollTop += (top + bottom) / 2 - (stageRect.top + stageRect.height / 2);
   }
+
+  editor.listActions = {
+    select(index) {
+      finalizeStyleEdit();
+      const operation = editor.operations[index];
+      if (!operation) return;
+      editor.selectedIndex = index;
+      loadOperationStyle(operation);
+      redraw();
+      syncStyleControlVisibility();
+      scrollOperationIntoView(operation);
+    },
+    remove: deleteOperationAt,
+  };
 
   document.getElementById("undo").addEventListener("click", undoOperation);
   document.getElementById("redo").addEventListener("click", redoOperation);
   document.getElementById("clear").addEventListener("click", clearAnnotations);
-  document.getElementById("deleteSelected").addEventListener("click", deleteSelectedOperation);
-  document.getElementById("duplicateSelected").addEventListener("click", duplicateSelectedOperation);
 
   document.addEventListener("keydown", (event) => {
     const target = event.target;
@@ -2718,6 +3044,15 @@ function setupAnnotationControls(baseName) {
       return;
     }
 
+    if (editor.currentTool === "crop" && (event.key === "Enter" || event.key === "Escape")) {
+      if (!isTextEntry && !target?.closest?.("[role='menu']")) {
+        event.preventDefault();
+        if (event.key === "Enter") applyCrop();
+        else cancelCrop();
+        return;
+      }
+    }
+
     if (event.key === "Escape") {
       finalizeStyleEdit();
       if (editor.activeTextInput) editor.activeTextInput.finish(false);
@@ -2727,7 +3062,12 @@ function setupAnnotationControls(baseName) {
       editor.dragStart = null;
       redraw();
       syncStyleControlVisibility();
-      renderStylePreview();
+      return;
+    }
+
+    if ((event.key === "Delete" || event.key === "Backspace") && !hasModifier && editor.selectedIndex >= 0) {
+      event.preventDefault();
+      deleteOperationAt(editor.selectedIndex);
       return;
     }
 
@@ -2737,8 +3077,29 @@ function setupAnnotationControls(baseName) {
     }
   });
 
+  /* ------------------------------ pointer ---------------------------- */
+
   editor.canvas.addEventListener("pointerdown", (event) => {
     const point = pointerToCanvasPoint(event);
+
+    if (editor.currentTool === "crop") {
+      event.preventDefault();
+      const edge = cropEdgeAt(point);
+      editor.interaction = edge
+        ? { type: "crop", edge, start: { ...editor.cropDraft } }
+        : {
+            type: "crop",
+            edge: null,
+            origin: {
+              x: Math.max(0, Math.min(editor.baseCanvas.width, point.x)),
+              y: Math.max(0, Math.min(editor.baseCanvas.height, point.y)),
+            },
+          };
+      editor.canvas.setPointerCapture(event.pointerId);
+      return;
+    }
+
+    // The selected annotation's handles resize it in any tool.
     const selected = editor.operations[editor.selectedIndex];
     const handle = selected ? handleAtPoint(selected, point) : null;
     if (selected && handle) {
@@ -2755,21 +3116,24 @@ function setupAnnotationControls(baseName) {
       return;
     }
 
-    const hitIndex = operationAtPoint(point);
-    if (hitIndex >= 0) {
+    // Only Select picks annotations up; every other tool always draws.
+    if (editor.currentTool === "select") {
       event.preventDefault();
       finalizeStyleEdit();
       if (editor.activeTextInput) editor.activeTextInput.finish(true);
+      const hitIndex = operationAtPoint(point);
       editor.selectedIndex = hitIndex;
-      loadSelectedStyle(editor.operations[hitIndex]);
+      if (hitIndex >= 0) {
+        loadOperationStyle(editor.operations[hitIndex]);
+        editor.interaction = {
+          type: "move",
+          lastPoint: point,
+          startOperation: cloneOperation(editor.operations[hitIndex]),
+        };
+        editor.canvas.setPointerCapture(event.pointerId);
+      }
       redraw();
       syncStyleControlVisibility();
-      editor.interaction = {
-        type: "move",
-        lastPoint: point,
-        startOperation: cloneOperation(editor.operations[hitIndex]),
-      };
-      editor.canvas.setPointerCapture(event.pointerId);
       return;
     }
 
@@ -2786,18 +3150,17 @@ function setupAnnotationControls(baseName) {
       finalizeStyleEdit();
       if (editor.activeTextInput) editor.activeTextInput.finish(true);
       editor.selectedIndex = -1;
-      syncStyleControlVisibility();
       pushOperation(
         {
           type: "step",
           point,
           number: nextStepNumber(),
-          radius: Math.max(36, currentStyle().textSize * 1.24),
-          ...currentStyle(),
+          ...currentStyle("step"),
+          textSize: STEP_TEXT_SIZE,
+          radius: Math.max(36, STEP_TEXT_SIZE * 1.24),
         },
         baseName
       );
-      renderStylePreview();
       return;
     }
 
@@ -2809,16 +3172,46 @@ function setupAnnotationControls(baseName) {
     editor.dragStart = point;
     editor.canvas.setPointerCapture(event.pointerId);
     if (editor.currentTool === "pen") {
-      editor.draft = { type: "pen", points: [point], ...currentStyle() };
+      editor.draft = { type: "pen", points: [point], ...currentStyle("pen") };
     } else {
       editor.draft = makeDragOperation(editor.currentTool, point, point);
     }
   });
 
+  // What the pointer would do here, as a cursor, in the tools that move things.
+  function syncHoverCursor(point) {
+    let cursor = "";
+    if (editor.currentTool === "crop") {
+      cursor = EDGE_CURSORS[cropEdgeAt(point)] || "";
+    } else {
+      const selected = editor.operations[editor.selectedIndex];
+      if (selected && handleAtPoint(selected, point)) cursor = "nwse-resize";
+      else if (editor.currentTool === "select" && operationAtPoint(point) >= 0) cursor = "move";
+    }
+    editor.canvas.style.cursor = cursor;
+  }
+
   editor.canvas.addEventListener("pointermove", (event) => {
+    const point = pointerToCanvasPoint(event);
+    if (editor.interaction?.type === "crop") {
+      event.preventDefault();
+      const interaction = editor.interaction;
+      if (interaction.edge) {
+        editor.cropDraft = resizeCrop(interaction.start, interaction.edge, point);
+      } else {
+        const dx = point.x - interaction.origin.x;
+        const dy = point.y - interaction.origin.y;
+        if (Math.hypot(dx, dy) < 4 * cssPixel()) return;
+        const edge = (dy < 0 ? "n" : "s") + (dx < 0 ? "w" : "e");
+        editor.cropDraft = resizeCrop({ ...interaction.origin, width: 0, height: 0 }, edge, point);
+      }
+      requestRedraw();
+      syncCropControls();
+      return;
+    }
+
     if (editor.interaction) {
       event.preventDefault();
-      const point = pointerToCanvasPoint(event);
       const operation = editor.operations[editor.selectedIndex];
       if (!operation) return;
 
@@ -2841,9 +3234,11 @@ function setupAnnotationControls(baseName) {
       return;
     }
 
-    if (!editor.draft || !editor.dragStart) return;
+    if (!editor.draft || !editor.dragStart) {
+      syncHoverCursor(point);
+      return;
+    }
     event.preventDefault();
-    const point = pointerToCanvasPoint(event);
     if (editor.draft.type === "pen") {
       editor.draft.points.push(point);
     } else {
@@ -2859,11 +3254,7 @@ function setupAnnotationControls(baseName) {
     editor.draft = null;
     editor.dragStart = null;
     if (operationIsLargeEnough(operation)) {
-      if (operation.type === "crop") {
-        cropToRect(operation.rect, baseName);
-      } else {
-        pushOperation(operation, baseName);
-      }
+      pushOperation(operation, baseName);
     } else {
       redraw();
     }
@@ -2872,6 +3263,12 @@ function setupAnnotationControls(baseName) {
   editor.canvas.addEventListener("pointerup", (event) => {
     if (!editor.interaction) return;
     event.preventDefault();
+    if (editor.interaction.type === "crop") {
+      editor.interaction = null;
+      redraw();
+      syncCropControls();
+      return;
+    }
     const operation = editor.operations[editor.selectedIndex];
     const before = editor.interaction.startOperation;
     editor.interaction = null;
@@ -2886,7 +3283,6 @@ function setupAnnotationControls(baseName) {
     redraw();
     syncEditActionState();
     syncStyleControlVisibility();
-    renderStylePreview();
     scheduleExportRefresh(baseName);
   });
 
@@ -2896,12 +3292,8 @@ function setupAnnotationControls(baseName) {
     editor.interaction = null;
     redraw();
     syncStyleControlVisibility();
-    renderStylePreview();
   });
 
-  setCurrentStyle(defaultStyle);
-  syncToolSurface();
-  renderStylePreview();
   syncEditActionState();
   syncStyleControlVisibility();
   editor.annotateMode = true;
@@ -2920,35 +3312,30 @@ async function setupCopyButton() {
         new ClipboardItem({ [pngBlob.type]: pngBlob }),
       ]);
       await saveRenderedProjectToHistory(outputCanvas, pngBlob);
-      setButtonLabel(copy, "copy", "Copied");
-      pulseFeedback(copy);
+      setButtonLabel(copy, "check", "Copied");
     } catch (err) {
       console.error("Copy failed:", err);
       setButtonLabel(copy, "copy", "Use PNG");
-      const png = document.getElementById("downloadPng");
-      if (png) {
-        pulseFeedback(png);
-        png.focus();
-      }
-      pulseFeedback(copy);
+      showExportStatus("Couldn't copy. Export a PNG instead.", "error");
     } finally {
       setTimeout(() => {
         copy.disabled = false;
-        copy.classList.remove("feedback");
         setButtonLabel(copy, "copy", "Copy");
-      }, 1500);
+      }, 1600);
     }
   });
 }
 
 async function setupUploadButton() {
+  // The menu closes on click, so progress shows in the top bar's status line.
   const upload = document.getElementById("upload");
-  const defaultLabel = "Upload & copy URL";
+  const label = document.getElementById("uploadLabel");
+  const defaultLabel = label.textContent;
   upload.addEventListener("click", async () => {
+    if (upload.disabled) return;
     upload.disabled = true;
-    upload.classList.remove("danger");
-    upload.classList.add("success");
-    setButtonLabel(upload, "upload", "Uploading...");
+    label.textContent = "Uploading...";
+    showExportStatus("Uploading...");
 
     try {
       finalizeStyleEdit();
@@ -2999,26 +3386,17 @@ async function setupUploadButton() {
       }
       await saveRenderedProjectToHistory(outputCanvas, pngBlob);
       await saveUploadToHistory(url);
-      setButtonLabel(upload, "upload", "URL copied");
-      pulseFeedback(upload);
+      showExportStatus("Link copied", "done");
     } catch (err) {
       if (err.name === "AbortError") {
         err.uiLabel = "Timed out";
       }
       console.error("Upload failed:", err);
-      upload.classList.remove("success");
-      upload.classList.add("danger");
-      const label = err.uiLabel || (err.name === "TypeError" ? "Network failed" : "Upload failed");
-      setButtonLabel(upload, "upload", label);
-      pulseFeedback(upload);
+      const reason = err.uiLabel || (err.name === "TypeError" ? "Network failed" : "Upload failed");
+      showExportStatus(reason === "Upload failed" ? reason : `Upload failed: ${reason}`, "error");
     } finally {
-      setTimeout(() => {
-        upload.disabled = false;
-        upload.classList.remove("feedback");
-        upload.classList.remove("danger");
-        upload.classList.add("success");
-        setButtonLabel(upload, "upload", defaultLabel);
-      }, 1800);
+      upload.disabled = false;
+      label.textContent = defaultLabel;
     }
   });
 }
@@ -3210,7 +3588,7 @@ function addNotice(text, action) {
   if (action) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "button secondary";
+    button.className = "control-button";
     button.textContent = action.label;
     button.addEventListener("click", async () => {
       button.disabled = true;
@@ -3331,9 +3709,7 @@ async function main() {
   loadProjectState(capture.project);
   redraw();
 
-  document.getElementById(
-    "dimensions"
-  ).textContent = `${editor.baseCanvas.width} x ${editor.baseCanvas.height}px`;
+  syncMeta();
 
   setupDownloadActions(baseName);
   setupPartControls();
@@ -3350,18 +3726,15 @@ async function main() {
   }
   markExportsStale(baseName, { quiet: true });
   status.textContent = "Preparing editor";
-  setupAnnotationControls(baseName);
   if (defaults.style) setCurrentStyle(defaults.style);
-  // The annotation style carries over to the next screenshot.
-  for (const id of ["color", "stroke", "textSize"]) {
-    document.getElementById(id)?.addEventListener("change", () => {
-      saveEditorDefaults({ style: currentStyle() }).catch(() => {});
-    });
-  }
+  setupAnnotationControls(baseName);
   setupLayoutControls(baseName);
+  setupPanelTabs();
+  setupNavigator();
 
   document.getElementById("canvasShell").hidden = false;
   document.getElementById("annotationPanel").hidden = false;
+  document.getElementById("toolRail").hidden = false;
   document.getElementById("actions").hidden = false;
   setupZoomControls();
   status.classList.remove("loading");

@@ -88,7 +88,7 @@ describe("storage", { concurrency: true }, () => {
       assert.equal(result.error, null);
       assert.equal(result.prestitched, null, "the forced failure did not reach the fallback path");
       const editor = await waitForEditor(harness);
-      assert.match(await editor.textContent("#dimensions"), /^1280 x 72\d\dpx$/);
+      assert.match(await editor.textContent("#dimensions"), /^1280 × 72\d\d$/);
       const state = await eventually(
         harness,
         (s) => s.history.length === 1 && !s.capture && !s.images.some((image) => image.key.startsWith("frame:"))
@@ -132,7 +132,7 @@ describe("storage", { concurrency: true }, () => {
       });
       await history.click(".actions button[title='Open saved screenshot in the editor']");
       const editor = await waitForEditor(harness);
-      assert.equal(await editor.textContent("#dimensions"), `${entry.width} x ${entry.height}px`);
+      assert.equal(await editor.textContent("#dimensions"), `${entry.width} × ${entry.height}`);
     })
   );
 

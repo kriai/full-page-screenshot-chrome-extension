@@ -215,7 +215,8 @@ describe("capture", { concurrency: CONCURRENCY }, () => {
               stream.on("error", reject);
             }, reject);
           });
-        const [whole] = await Promise.all([editor.waitForEvent("download"), editor.click("#downloadPrimary")]);
+        await editor.click("#downloadToggle");
+        const [whole] = await Promise.all([editor.waitForEvent("download"), editor.click('[data-download="png"]')]);
         const png = await read(whole);
         await editor.click("#downloadToggle");
         const [small] = await Promise.all([editor.waitForEvent("download"), editor.click('[data-download="smaller"]')]);
