@@ -194,9 +194,10 @@ describe("capture", { concurrency: CONCURRENCY }, () => {
     assertPrefix(captured, 700);
   });
 
-  // The editor on a split capture: move between parts, and download the
-  // whole page as one PNG written row by row past any canvas limit.
-  it("editor: parts can be switched and downloaded as one PNG", { timeout: TIMEOUT }, async () => {
+  // The editor on a split capture: move between parts, download the whole
+  // page as one PNG written row by row past any canvas limit, and as one
+  // smaller image that fits a canvas.
+  it("editor: parts can be switched and downloaded whole or shrunk", { timeout: TIMEOUT }, async () => {
     const { result, inspected } = await captureFixture("very-tall", {
       viewport: { width: 1280, height: 2000 },
       budget: { maxContentHeight: 45000 },
@@ -205,37 +206,33 @@ describe("capture", { concurrency: CONCURRENCY }, () => {
         const first = await editor.textContent("#partLabel");
         await editor.click("#partNext");
         await editor.waitForFunction(() => document.getElementById("partLabel").textContent.startsWith("Part 2"));
-        const [download] = await Promise.all([editor.waitForEvent("download"), editor.click("#downloadAll")]);
-        const png = await new Promise((resolve, reject) => {
-          download.createReadStream().then((stream) => {
-            const chunks = [];
-            stream.on("data", (chunk) => chunks.push(chunk));
-            stream.on("end", () => resolve(Buffer.concat(chunks)));
-            stream.on("error", reject);
-          }, reject);
-        });
-        return { first, height: png.readUInt32BE(20), signature: png.toString("ascii", 1, 4) };
+        const read = (download) =>
+          new Promise((resolve, reject) => {
+            download.createReadStream().then((stream) => {
+              const chunks = [];
+              stream.on("data", (chunk) => chunks.push(chunk));
+              stream.on("end", () => resolve(Buffer.concat(chunks)));
+              stream.on("error", reject);
+            }, reject);
+          });
+        const [whole] = await Promise.all([editor.waitForEvent("download"), editor.click("#downloadPrimary")]);
+        const png = await read(whole);
+        await editor.click("#downloadToggle");
+        const [small] = await Promise.all([editor.waitForEvent("download"), editor.click('[data-download="smaller"]')]);
+        const smaller = await read(small);
+        return {
+          first,
+          height: png.readUInt32BE(20),
+          signature: png.toString("ascii", 1, 4),
+          smallerHeight: smaller.readUInt32BE(20),
+        };
       },
     });
     assert.match(inspected.first, /^Part 1 of \d/);
     assert.equal(inspected.signature, "PNG");
     assert.equal(inspected.height, result.prestitched.height, "the stacked PNG is not the full height");
     assert.ok(inspected.height > 32767, "the stacked PNG should be taller than any canvas");
+    assert.ok(inspected.smallerHeight <= 32767, "the smaller image must fit a canvas");
   });
 
-  // The same endless feed with "shrink to one image" chosen instead: the
-  // stitch is scaled to fit. That path once failed on a one-pixel rounding
-  // error and left the capture without an image. The shrunken row codes are
-  // too small to read, so only the result is checked.
-  it("full page: infinite-feed is shrunk to fit when asked, not lost", { timeout: TIMEOUT }, async () => {
-    const { result } = await captureFixture("infinite-feed", {
-      viewport: { width: 1280, height: 2000 },
-      budget: { maxFrames: 20 },
-      settings: { longPages: "shrink" },
-    });
-    assert.equal(result.truncated?.reason, "frames");
-    assert.ok(result.prestitched, "the worker stitcher failed and the viewer fallback was used");
-    assert.ok(result.prestitched.downscaled > 0 && result.prestitched.downscaled < 1);
-    assert.ok(result.prestitched.height <= 32767);
-  });
 });

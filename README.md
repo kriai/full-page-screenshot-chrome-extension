@@ -34,11 +34,12 @@ export controls.
   screenshots; annotation colour, stroke, text size and JPEG quality are
   remembered.
 - Pages too tall for one image are saved in parts at full resolution, each
-  with its own annotations. Download them as one tall PNG, a zip of the
-  parts, or a PDF with a page per part. "Shrink to one image" in the popup
-  keeps the old behaviour.
-- "Wait for slow content" in the popup holds each section until the page's
-  requests and nearby images have loaded, for pages that fill in late.
+  with its own annotations; a pager floats over the screenshot. The Download
+  menu offers the whole page as one tall PNG, separate parts in a zip, one
+  smaller image that opens anywhere, or just the current part.
+- When images were still loading during a capture, the editor says so and
+  offers "Recapture, waiting for them", which captures the page again while
+  holding each section until its requests and nearby images have loaded.
 - Keyboard shortcuts: Alt+Shift+P captures the full page; visible-area and
   area capture can be given keys at `chrome://extensions/shortcuts`.
 - Undo and redo annotation changes.

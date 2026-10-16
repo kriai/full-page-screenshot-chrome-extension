@@ -85,7 +85,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const access = await checkPageAccess(tab);
     if (!access.ok) {
-      sendResponse({ ok: false, error: access.message });
+      sendResponse({ ok: false, error: access.message, reason: access.reason });
       return;
     }
 
@@ -144,15 +144,30 @@ chrome.commands.onCommand.addListener(async (command, commandTab) => {
     if (tab?.id) setTemporaryErrorBadge(tab.id, access.message);
     return;
   }
-  await runCapture(tab, mode, await captureOptionsFromSettings());
+  await runCapture(tab, mode, {});
 });
 
-// Options the popup would otherwise pass along, read from saved settings for
-// captures started without it.
-async function captureOptionsFromSettings() {
-  const { settings = {} } = await chrome.storage.local.get("settings");
-  return settings.waitForContent ? { waitForContent: true } : {};
-}
+// "Recapture, waiting for them": offered by the editor when images were still
+// loading during a capture. The tab is brought back to the front (only the
+// visible tab can be photographed) and captured again, waiting for slow
+// content. The activeTab grant from the first capture still holds as long as
+// the tab has not navigated.
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type !== "recapture") return false;
+  (async () => {
+    const tab = await chrome.tabs.get(message.tabId).catch(() => null);
+    if (!tab || withoutHash(tab.url) !== withoutHash(message.url)) {
+      sendResponse({ ok: false, error: "The original page has been closed or has moved on." });
+      return;
+    }
+    await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.update(tab.id, { active: true });
+    sendResponse({ ok: true });
+    await sleep(300);
+    await runCapture(tab, "fullPage", { waitForContent: true });
+  })().catch((err) => sendResponse({ ok: false, error: err.message }));
+  return true;
+});
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -1442,6 +1457,9 @@ async function captureFullPage(tab, options = {}) {
       },
       truncated: result.truncated,
       diagnostics: result.diagnostics || undefined,
+      // For the editor's "Recapture, waiting for them".
+      loading: { frames: result.framesStillLoading, waited: !!options.waitForContent },
+      sourceTabId: tab.id,
       mode: "fullPage",
     });
     session.saved = true;
@@ -1515,14 +1533,16 @@ async function runCaptureLoop(tab, session, target) {
   let growthChecks = 0;
   let grewDuringRun = false;
   let patientBottomWaited = false;
+  let framesStillLoading = 0;
   let driftRejections = 0;
   let lastDestTop = -1;
   let shell = null;
   // "full" (the default): pages too tall for one image are saved in parts at
   // full resolution. "shrink": one image, scaled down to fit.
-  const { settings = {} } = await chrome.storage.local.get("settings");
+  // Pages too tall for one image are saved in parts at full resolution; the
+  // editor offers a smaller single image as a download.
   const stitcher = new IncrementalStitcher(target, {
-    split: settings.longPages !== "shrink",
+    split: true,
     keyPrefix: `cap:${session.runId}:`,
   });
   session.stitcher = stitcher;
@@ -1753,6 +1773,9 @@ async function runCaptureLoop(tab, session, target) {
       });
       // The walk steers the live page, so it is fed the page's own numbers.
       const covered = walk.accept(measured);
+      // Images still loading when this frame was taken: the editor offers a
+      // recapture that waits for them.
+      if (settle?.pending > 0) framesStillLoading++;
 
       prevBitmap?.close();
       prevBitmap = seam.bitmap;
@@ -1915,7 +1938,7 @@ async function runCaptureLoop(tab, session, target) {
     console.info("[full-page-screenshot] capture diagnostics", diagnostics);
   }
 
-  return { frames, covered: walk.covered, contentHeight, truncated, diagnostics, shell, stitched };
+  return { frames, covered: walk.covered, contentHeight, truncated, diagnostics, shell, stitched, framesStillLoading };
 }
 
 async function saveCapture(tab, capture) {

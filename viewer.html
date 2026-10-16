@@ -643,25 +643,151 @@
       vertical-align: top;
     }
 
-    .part-nav {
-      display: inline-flex;
+    /* Download: one button for the usual file, a menu for the rest. */
+    .download { position: relative; }
+    #downloadToggle { min-width: 30px; padding: 0 9px; }
+    .download-menu {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 6px);
+      z-index: 30;
+      width: 340px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 6px;
+    }
+    .download-menu[hidden], .download-split[hidden], .quality-row[hidden] { display: none; }
+    .download-menu button[data-download] {
+      display: flex;
+      flex: 1;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 10px;
+      width: 100%;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      text-align: left;
+      padding: 8px 10px;
+      cursor: pointer;
+    }
+    .download-menu button[data-download]:hover,
+    .download-menu button[data-download]:focus-visible { background: var(--selected-bg); outline: none; }
+    .download-menu button[data-download] span { white-space: nowrap; }
+    .download-menu small { color: var(--muted); font-size: 11px; text-align: right; }
+    .download-row { display: flex; align-items: center; }
+    .quality-edit {
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 13px;
+      padding: 6px 8px;
+    }
+    .quality-edit:hover, .quality-edit[aria-expanded="true"] { color: var(--text); background: var(--panel-2); }
+    .quality-row { display: flex; align-items: center; gap: 8px; padding: 2px 10px 8px; color: var(--muted); font-size: 12px; }
+    .quality-row input[type="range"] { flex: 1; }
+    .download-split { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+
+    /* Notices above the screenshot, some with an action. */
+    .notices { display: grid; gap: 8px; margin-bottom: 12px; }
+    .notices:empty { display: none; }
+    .notice {
+      display: flex;
       align-items: center;
-      gap: 6px;
-      margin-left: 10px;
-      font-size: 12px;
+      gap: 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--panel);
+      color: #dce3ef;
+      font-size: 13px;
+      padding: 8px 10px;
+    }
+    .notice p { flex: 1; margin: 0; }
+    .notice .button { min-height: 30px; }
+    .notice .dismiss {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      padding: 2px 4px;
     }
 
-    .part-nav .button { padding: 2px 8px; min-width: 0; }
-
-    .jpeg-quality {
+    /* Floating pager for captures saved in parts. */
+    .part-pager {
+      position: fixed;
+      bottom: 22px;
+      left: calc(50% + 150px);
+      transform: translateX(-50%);
+      z-index: 20;
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      font-size: 12px;
-      opacity: 0.85;
+      gap: 2px;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      background: rgba(29, 34, 43, 0.94);
+      box-shadow: var(--shadow);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 650;
+      padding: 4px;
     }
+    .part-pager[hidden] { display: none; }
+    .part-pager span { padding: 0 10px; font-variant-numeric: tabular-nums; }
+    .part-pager button {
+      width: 32px;
+      height: 32px;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 20px;
+      line-height: 1;
+    }
+    .part-pager button:hover:not(:disabled) { background: var(--panel-2); }
+    .part-pager button:disabled { color: var(--muted-2); cursor: default; }
 
-    .jpeg-quality input { width: 80px; }
+    /* Presentation panel: small headings, frame chips, segmented stamp. */
+    .subhead { margin: 16px 0 6px; color: var(--muted); font-size: 11px; font-weight: 750; letter-spacing: 0.04em; text-transform: uppercase; }
+    .layout-controls .subhead:first-child { margin-top: 4px; }
+    .frame-chips { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+    .frame-chip {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+      font: inherit;
+      font-size: 10px;
+      padding: 4px;
+    }
+    .frame-chip i { display: flex; align-items: center; gap: 2px; height: 22px; border-radius: 3px; background: #2a303b; padding: 0 3px; }
+    .frame-chip.light i { background: linear-gradient(#e9e9eb 0 7px, #c9ced8 7px); }
+    .frame-chip.dark i { background: linear-gradient(#2b2c30 0 7px, #4a5160 7px); }
+    .frame-chip.none i { background: #c9ced8; }
+    .frame-chip i b { width: 4px; height: 4px; border-radius: 50%; align-self: flex-start; margin-top: 1.5px; background: #ff5f57; }
+    .frame-chip i b + b { background: #febc2e; } .frame-chip i b + b + b { background: #28c840; }
+    .frame-chip[aria-checked="true"] { border-color: var(--selected-border); background: var(--selected-bg); color: var(--text); }
+    .segmented { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line-strong); border-radius: 6px; overflow: hidden; }
+    .segmented button { border: 0; border-left: 1px solid var(--line-strong); background: var(--surface); color: var(--muted); cursor: pointer; font: inherit; font-size: 12px; padding: 6px 4px; }
+    .segmented button:first-child { border-left: 0; }
+    .segmented button[aria-checked="true"] { background: var(--selected-bg); color: var(--text); }
+    .toggle-row.compact { margin-top: 8px; font-size: 12px; font-weight: 600; }
+    .toggle-row.compact input[type="checkbox"] { width: 18px; height: 18px; }
+    .link-button { margin-top: 14px; border: 0; background: transparent; color: var(--accent-strong); cursor: pointer; font: inherit; font-size: 12px; padding: 0; }
+    .link-button:hover { text-decoration: underline; }
 
     /* On-screen previews of the browser frame and stamp; the exported image
        draws them for real (drawBrowserFrame, drawStamp). */
@@ -881,6 +1007,9 @@
       .stage {
         padding: 14px;
       }
+      .part-pager {
+        left: 50%;
+      }
       #editorCanvas {
         max-width: none;
       }
@@ -928,11 +1057,7 @@
     <header>
       <h1 id="title">Full Page Screenshot</h1>
       <span id="dimensions"></span>
-      <span class="part-nav" id="partNav" hidden>
-        <button type="button" class="button" id="partPrev" title="Previous part ([)" aria-label="Previous part">&lsaquo;</button>
-        <span id="partLabel"></span>
-        <button type="button" class="button" id="partNext" title="Next part (])" aria-label="Next part">&rsaquo;</button>
-      </span>
+
       <div class="zoom-controls" id="zoomControls" hidden aria-label="Zoom controls">
       <button class="zoom-button" id="zoomOut" type="button" title="Zoom out" aria-label="Zoom out">-</button>
       <span class="zoom-value" id="zoomValue">Fit</span>
@@ -958,18 +1083,33 @@
           </svg>
         </span>Upload & copy URL
       </button>
-      <div class="export-group" aria-label="Download formats">
-        <a class="button" id="downloadPng" title="Download PNG">PNG</a>
-        <a class="button" id="downloadJpeg" title="Download JPEG">JPEG</a>
-        <a class="button" id="downloadPdf" title="Download PDF">PDF</a>
-        <a class="button" id="downloadAll" hidden title="Every part stacked into one full-resolution PNG (some image viewers cannot open images over 65,535px tall)">One PNG</a>
-        <a class="button" id="downloadZip" hidden title="Every part as its own PNG, in a zip">Zip</a>
+      <div class="download" id="download">
+        <div class="export-group">
+          <button class="button" id="downloadPrimary" type="button" title="Download in best quality (PNG)">Download</button>
+          <button class="button" id="downloadToggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="downloadMenu" title="More ways to download">&#9662;</button>
+        </div>
+        <div class="download-menu" id="downloadMenu" role="menu" hidden>
+          <button type="button" role="menuitem" data-download="png"><span>Best quality</span><small id="pngSub">PNG</small></button>
+          <div class="download-row">
+            <button type="button" role="menuitem" data-download="jpeg"><span>Smaller file</span><small id="jpegSub">JPEG · quality 92</small></button>
+            <button type="button" class="quality-edit" id="qualityEdit" title="Change JPEG quality" aria-label="Change JPEG quality" aria-expanded="false">&#9998;</button>
+          </div>
+          <div class="quality-row" id="qualityRow" hidden>
+            <input id="jpegQuality" type="range" min="50" max="100" value="92" aria-label="JPEG quality" />
+            <span id="jpegQualityValue">92</span>
+          </div>
+          <button type="button" role="menuitem" data-download="pdf"><span>Document to share</span><small id="pdfSub">PDF</small></button>
+          <div class="download-split" id="downloadSplit" hidden>
+            <button type="button" role="menuitem" data-download="zip"><span>Separate parts</span><small id="zipSub">zip of PNGs</small></button>
+            <button type="button" role="menuitem" data-download="smaller"><span>One image that opens anywhere</span><small>shrunk to fit</small></button>
+            <button type="button" role="menuitem" data-download="part"><span>Just this part</span><small id="partSub">PNG</small></button>
+          </div>
+        </div>
+        <!-- Pre-rendered files for the menu's single-image choices. -->
+        <a id="downloadPng" hidden></a>
+        <a id="downloadJpeg" hidden></a>
+        <a id="downloadPdf" hidden></a>
       </div>
-      <label class="jpeg-quality" title="JPEG and PDF quality, remembered for next time">
-        <span>JPEG</span>
-        <input id="jpegQuality" type="range" min="50" max="100" value="92" />
-        <span id="jpegQualityValue">92</span>
-      </label>
       <span class="export-status" id="exportStatus" hidden aria-live="polite"></span>
     </div>
   </header>
@@ -1086,6 +1226,7 @@
           <input id="layoutEnabled" type="checkbox" />
         </label>
         <div class="layout-controls" id="layoutControls" hidden>
+          <div class="subhead">Canvas</div>
           <div class="control">
             <span>Background</span>
             <select id="layoutBackground">
@@ -1120,34 +1261,43 @@
             <span class="value" id="layoutShadowValue">28 px</span>
             <input id="layoutShadow" type="range" min="0" max="80" value="28" />
           </div>
-          <div class="control">
-            <span>Browser frame</span>
-            <select id="layoutFrame">
-              <option value="none">None</option>
-              <option value="mac">macOS</option>
-              <option value="mac-dark">macOS dark</option>
-              <option value="windows">Windows</option>
-              <option value="windows-dark">Windows dark</option>
-            </select>
+          <div class="subhead">Browser frame</div>
+          <div class="frame-chips" role="radiogroup" aria-label="Browser frame">
+            <button type="button" class="frame-chip none" data-frame="none" role="radio" title="No frame"><i></i><span>None</span></button>
+            <button type="button" class="frame-chip light" data-frame="mac" role="radio" title="macOS"><i><b></b><b></b><b></b></i><span>Mac</span></button>
+            <button type="button" class="frame-chip dark" data-frame="mac-dark" role="radio" title="macOS, dark"><i><b></b><b></b><b></b></i><span>Mac dark</span></button>
+            <button type="button" class="frame-chip light win" data-frame="windows" role="radio" title="Windows"><i></i><span>Windows</span></button>
+            <button type="button" class="frame-chip dark win" data-frame="windows-dark" role="radio" title="Windows, dark"><i></i><span>Win dark</span></button>
           </div>
-          <label class="toggle-row">
-            <span>Show address in frame</span>
+          <select id="layoutFrame" hidden>
+            <option value="none">None</option>
+            <option value="mac">macOS</option>
+            <option value="mac-dark">macOS dark</option>
+            <option value="windows">Windows</option>
+            <option value="windows-dark">Windows dark</option>
+          </select>
+          <label class="toggle-row compact">
+            <span>Show address</span>
             <input id="layoutFrameAddress" type="checkbox" checked />
           </label>
-          <div class="control">
-            <span>Stamp</span>
-            <select id="layoutStamp">
-              <option value="none">None</option>
-              <option value="date">Date</option>
-              <option value="datetime">Date and time</option>
-              <option value="iso">ISO timestamp</option>
-            </select>
+          <div class="subhead">Stamp</div>
+          <div class="segmented" role="radiogroup" aria-label="Stamp">
+            <button type="button" data-stamp="none" role="radio">Off</button>
+            <button type="button" data-stamp="date" role="radio">Date</button>
+            <button type="button" data-stamp="datetime" role="radio">Date + time</button>
+            <button type="button" data-stamp="iso" role="radio">ISO</button>
           </div>
-          <label class="toggle-row">
-            <span>Add page address to stamp</span>
+          <select id="layoutStamp" hidden>
+            <option value="none">None</option>
+            <option value="date">Date</option>
+            <option value="datetime">Date and time</option>
+            <option value="iso">ISO timestamp</option>
+          </select>
+          <label class="toggle-row compact">
+            <span>Add page address</span>
             <input id="layoutStampUrl" type="checkbox" />
           </label>
-          <button class="button" id="layoutSaveDefault" type="button" title="Start new screenshots with this presentation">Use as default</button>
+          <button class="link-button" id="layoutSaveDefault" type="button" title="Start new screenshots with this presentation">Save as default</button>
         </div>
       </div>
       <div class="section">
@@ -1189,7 +1339,13 @@
       </div>
     </aside>
     <main class="stage">
+      <div class="notices" id="notices"></div>
       <div id="status" class="loading">Stitching screenshot...</div>
+      <nav class="part-pager" id="partNav" hidden aria-label="Parts of this capture">
+        <button type="button" id="partPrev" title="Previous part ([)" aria-label="Previous part">&lsaquo;</button>
+        <span id="partLabel"></span>
+        <button type="button" id="partNext" title="Next part (])" aria-label="Next part">&rsaquo;</button>
+      </nav>
       <div class="canvas-shell" id="canvasShell" hidden>
         <div class="mini-toolbar" id="miniToolbar" hidden aria-label="Selected annotation actions">
           <button class="mini-swatch" type="button" data-mini-color="#ff453a" style="--preset-color:#ff453a" title="Red" aria-label="Red"></button>

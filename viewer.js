@@ -736,6 +736,7 @@ async function switchPart(index) {
   redraw();
   applyLayoutPreview();
   syncPartNav();
+  syncJpegLabel();
   markExportsStale(editor.baseName, { quiet: true });
 }
 
@@ -777,23 +778,7 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
-async function exportBusy(anchor, work) {
-  if (anchor.dataset.busy) return;
-  anchor.dataset.busy = "1";
-  const label = anchor.textContent;
-  anchor.textContent = "Preparing...";
-  try {
-    await work();
-  } catch (err) {
-    console.error("Export failed:", err);
-    showExportStatus("Export failed", "error");
-  } finally {
-    anchor.textContent = label;
-    delete anchor.dataset.busy;
-  }
-}
-
-function setupPartControls(baseName) {
+function setupPartControls() {
   if (!editor.parts) return;
   document.getElementById("partPrev").addEventListener("click", () => switchPart(editor.partIndex - 1));
   document.getElementById("partNext").addEventListener("click", () => switchPart(editor.partIndex + 1));
@@ -806,21 +791,89 @@ function setupPartControls(baseName) {
   const crop = document.querySelector('[data-tool="crop"]');
   if (crop) crop.hidden = true;
 
+  syncPartNav();
+}
+
+// One image small enough to open anywhere: every part stacked and scaled to
+// fit a single canvas. Used for the split capture's "One image that opens
+// anywhere" and "Smaller file" downloads.
+async function shrunkWholePage(sources) {
   const width = Math.max(...editor.parts.map((part) => part.width));
-  const all = document.getElementById("downloadAll");
-  const zip = document.getElementById("downloadZip");
-  const pdf = document.getElementById("downloadPdf");
-  all.hidden = false;
-  zip.hidden = false;
-  all.addEventListener("click", (event) => {
-    event.preventDefault();
-    exportBusy(all, async () => {
-      downloadBlob(await FpsExport.stackToPng(await partSources(), width), `${baseName}.png`);
-    });
+  const total = editor.parts.reduce((sum, part) => sum + part.height, 0);
+  const scale = Math.min(1, (FpsGeometry.MAX_CANVAS_SIDE - 4) / total, Math.sqrt(FpsGeometry.MAX_CANVAS_PIXELS / (width * total)));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(total * scale));
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingQuality = "high";
+  let y = 0;
+  for (const source of sources) {
+    const image = source instanceof Blob ? await createImageBitmap(source) : source;
+    const height = Math.round(image.height * scale);
+    ctx.drawImage(image, 0, y, Math.round(image.width * scale), height);
+    y += height;
+    if (source instanceof Blob) image.close();
+  }
+  return canvas;
+}
+
+// The Download button and its menu. The button gives the best-quality file;
+// the menu names each choice by what it is for. Choices that only make sense
+// for a capture saved in parts appear only then.
+function setupDownloadMenu(baseName) {
+  const primary = document.getElementById("downloadPrimary");
+  const toggle = document.getElementById("downloadToggle");
+  const menu = document.getElementById("downloadMenu");
+  const split = !!editor.parts;
+
+  document.getElementById("downloadSplit").hidden = !split;
+  if (split) {
+    document.getElementById("pngSub").textContent = "PNG, one tall image";
+    document.getElementById("jpegSub").dataset.suffix = ", shrunk to fit";
+    document.getElementById("pdfSub").textContent = "PDF, a page per part";
+    document.getElementById("zipSub").textContent = `zip of ${editor.parts.length} PNGs`;
+  }
+  syncJpegLabel();
+
+  const setOpen = (open) => {
+    menu.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    if (open) menu.querySelector("button[data-download]")?.focus();
+  };
+  toggle.addEventListener("click", () => setOpen(menu.hidden));
+  document.addEventListener("click", (event) => {
+    if (!menu.hidden && !event.target.closest("#download")) setOpen(false);
   });
-  zip.addEventListener("click", (event) => {
-    event.preventDefault();
-    exportBusy(zip, async () => {
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !menu.hidden) {
+      setOpen(false);
+      toggle.focus();
+    }
+  });
+
+  const width = split ? Math.max(...editor.parts.map((part) => part.width)) : 0;
+  const actions = {
+    png: async () => {
+      if (!split) return document.getElementById("downloadPng").click();
+      downloadBlob(await FpsExport.stackToPng(await partSources(), width), `${baseName}.png`);
+    },
+    jpeg: async () => {
+      if (!split) return document.getElementById("downloadJpeg").click();
+      // A JPEG cannot be taller than 65,535px, so the whole page is shrunk.
+      const canvas = await shrunkWholePage(await partSources());
+      downloadBlob(await canvasToBlob(makeJpegCanvas(canvas), "image/jpeg", editor.jpegQuality), `${baseName}.jpg`);
+    },
+    pdf: async () => {
+      if (!split) return document.getElementById("downloadPdf").click();
+      const pages = [];
+      for (const source of await partSources()) {
+        const canvas = source instanceof Blob ? await blobToCanvas(source) : source;
+        const jpeg = await canvasToBlob(makeJpegCanvas(canvas), "image/jpeg", editor.jpegQuality);
+        pages.push({ jpegBytes: new Uint8Array(await jpeg.arrayBuffer()), width: canvas.width, height: canvas.height });
+      }
+      downloadBlob(makePdfPages(pages), `${baseName}.pdf`);
+    },
+    zip: async () => {
       const files = [];
       const sources = await partSources();
       for (let i = 0; i < sources.length; i++) {
@@ -828,28 +881,40 @@ function setupPartControls(baseName) {
         files.push({ name: `${baseName}-part-${i + 1}.png`, bytes: new Uint8Array(await blob.arrayBuffer()) });
       }
       downloadBlob(new Blob(FpsExport.zipStore(files), { type: "application/zip" }), `${baseName}.zip`);
-    });
-  });
-  // A split capture's PDF has a page per part, built when asked for.
-  pdf.title = "Download PDF (one page per part)";
-  pdf.addEventListener(
-    "click",
-    (event) => {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      exportBusy(pdf, async () => {
-        const pages = [];
-        for (const source of await partSources()) {
-          const canvas = source instanceof Blob ? await blobToCanvas(source) : source;
-          const jpeg = await canvasToBlob(makeJpegCanvas(canvas), "image/jpeg", editor.jpegQuality);
-          pages.push({ jpegBytes: new Uint8Array(await jpeg.arrayBuffer()), width: canvas.width, height: canvas.height });
-        }
-        downloadBlob(makePdfPages(pages), `${baseName}.pdf`);
-      });
     },
-    true
-  );
-  syncPartNav();
+    smaller: async () => {
+      const canvas = await shrunkWholePage(await partSources());
+      downloadBlob(await canvasToBlob(canvas, "image/png"), `${baseName}-smaller.png`);
+    },
+    // The current part, with the presentation layout, as the editor shows it.
+    part: () => document.getElementById("downloadPng").click(),
+  };
+
+  const run = async (kind) => {
+    setOpen(false);
+    finalizeStyleEdit();
+    if (editor.activeTextInput) editor.activeTextInput.finish(true);
+    if (!split || kind === "part") return actions[kind]();
+    showExportStatus("Preparing...");
+    try {
+      await actions[kind]();
+      showExportStatus("Downloaded", "done");
+    } catch (err) {
+      console.error("Export failed:", err);
+      showExportStatus("Export failed", "error");
+    }
+  };
+  primary.addEventListener("click", () => run("png"));
+  for (const item of menu.querySelectorAll("[data-download]")) {
+    item.addEventListener("click", () => run(item.dataset.download));
+  }
+}
+
+function syncJpegLabel() {
+  const sub = document.getElementById("jpegSub");
+  if (sub) sub.textContent = `JPEG · quality ${Math.round(editor.jpegQuality * 100)}${sub.dataset.suffix || ""}`;
+  const part = document.getElementById("partSub");
+  if (part && editor.parts) part.textContent = `part ${editor.partIndex + 1}, PNG`;
 }
 
 async function blobToCanvas(blob) {
@@ -2280,17 +2345,27 @@ async function saveEditorDefaults(patch) {
   await chrome.storage.local.set({ settings: { ...settings, editorDefaults } });
 }
 
+// JPEG quality lives behind the pencil next to "Smaller file", and is
+// remembered for next time.
 function setupJpegQuality(baseName) {
   const input = document.getElementById("jpegQuality");
   const label = document.getElementById("jpegQualityValue");
+  const edit = document.getElementById("qualityEdit");
+  const row = document.getElementById("qualityRow");
   if (!input) return;
   input.value = String(Math.round(editor.jpegQuality * 100));
   label.textContent = input.value;
+  edit.addEventListener("click", () => {
+    row.hidden = !row.hidden;
+    edit.setAttribute("aria-expanded", String(!row.hidden));
+    if (!row.hidden) input.focus();
+  });
   input.addEventListener("input", () => {
     label.textContent = input.value;
   });
   input.addEventListener("change", async () => {
     editor.jpegQuality = Number(input.value) / 100;
+    syncJpegLabel();
     await saveEditorDefaults({ jpegQuality: editor.jpegQuality });
     scheduleExportRefresh(baseName);
   });
@@ -2330,6 +2405,7 @@ function syncLayoutControlValues() {
   document.getElementById("layoutFrameAddress").checked = editor.layout.frameAddress !== false;
   document.getElementById("layoutStamp").value = editor.layout.stamp || "none";
   document.getElementById("layoutStampUrl").checked = !!editor.layout.stampUrl;
+  syncPickers();
   background.value = editor.layout.background;
   aspect.value = editor.layout.aspect;
   padding.value = String(editor.layout.padding);
@@ -2338,6 +2414,37 @@ function syncLayoutControlValues() {
   if (paddingValue) paddingValue.textContent = `${editor.layout.padding} px`;
   if (radiusValue) radiusValue.textContent = `${editor.layout.radius} px`;
   if (shadowValue) shadowValue.textContent = `${editor.layout.shadow} px`;
+}
+
+// The frame chips and stamp buttons stand in for hidden selects, which stay
+// the source of truth for refreshLayout.
+function syncPickers() {
+  const frame = document.getElementById("layoutFrame").value;
+  for (const chip of document.querySelectorAll("[data-frame]")) {
+    chip.setAttribute("aria-checked", String(chip.dataset.frame === frame));
+  }
+  const stamp = document.getElementById("layoutStamp").value;
+  for (const button of document.querySelectorAll("[data-stamp]")) {
+    button.setAttribute("aria-checked", String(button.dataset.stamp === stamp));
+  }
+  document.getElementById("layoutFrameAddress").closest("label").hidden = frame === "none";
+  document.getElementById("layoutStampUrl").closest("label").hidden = stamp === "none";
+}
+
+function setupPickers() {
+  const pick = (select, value) => {
+    select.value = value;
+    select.dispatchEvent(new Event("change"));
+    syncPickers();
+  };
+  const frame = document.getElementById("layoutFrame");
+  const stamp = document.getElementById("layoutStamp");
+  for (const chip of document.querySelectorAll("[data-frame]")) {
+    chip.addEventListener("click", () => pick(frame, chip.dataset.frame));
+  }
+  for (const button of document.querySelectorAll("[data-stamp]")) {
+    button.addEventListener("click", () => pick(stamp, button.dataset.stamp));
+  }
 }
 
 function setupLayoutControls(baseName) {
@@ -2381,13 +2488,14 @@ function setupLayoutControls(baseName) {
   }
 
   syncLayoutControlValues();
+  setupPickers();
   for (const control of [frame, frameAddress, stamp, stampUrl]) control.addEventListener("change", refreshLayout);
   saveDefault.addEventListener("click", async () => {
     await saveEditorDefaults({ layout: cloneLayout() });
-    saveDefault.textContent = "Saved as default";
+    saveDefault.textContent = "Saved for new screenshots";
     setTimeout(() => {
-      saveDefault.textContent = "Use as default";
-    }, 1400);
+      saveDefault.textContent = "Save as default";
+    }, 1600);
   });
   enabled.addEventListener("change", refreshLayout);
   background.addEventListener("change", refreshLayout);
@@ -3075,12 +3183,6 @@ function captureNotice(capture, report) {
     parts.push(`Partial capture: ${capture.truncated.message}`);
   }
   if (report.scaleWarning) parts.push(report.scaleWarning);
-  if (capture.parts?.length > 1) {
-    parts.push(
-      `This page was too tall for one image, so it was saved in ${capture.parts.length} parts at full resolution. ` +
-        "Use the arrows (or [ and ]) to move between them; One PNG downloads the whole page as a single file."
-    );
-  }
   if (report.downscaled) {
     parts.push(
       `The page was taller than a single image can be, so it was scaled to ${Math.round(
@@ -3093,6 +3195,75 @@ function captureNotice(capture, report) {
     parts.push(`${Math.round(missing)}px of the page could not be captured.`);
   }
   return parts.join(" ");
+}
+
+// Notices above the screenshot. Problems are explained where they show, and
+// the two that have a fix carry it: images that had not loaded (recapture,
+// waiting for them) and a page too tall for one image (a smaller single
+// image instead of parts).
+function addNotice(text, action) {
+  const box = document.createElement("div");
+  box.className = "notice";
+  const message = document.createElement("p");
+  message.textContent = text;
+  box.appendChild(message);
+  if (action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "button secondary";
+    button.textContent = action.label;
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        await action.run();
+      } catch (err) {
+        message.textContent = err.message || String(err);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    box.appendChild(button);
+  }
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "dismiss";
+  dismiss.title = "Dismiss";
+  dismiss.setAttribute("aria-label", "Dismiss");
+  dismiss.textContent = "×";
+  dismiss.addEventListener("click", () => box.remove());
+  box.appendChild(dismiss);
+  document.getElementById("notices").appendChild(box);
+}
+
+function showCaptureNotices(capture, report) {
+  const text = captureNotice(capture, report);
+  if (text) addNotice(text);
+
+  const loading = capture.loading;
+  if (loading?.frames > 0 && capture.sourceTabId) {
+    if (loading.waited) {
+      addNotice("Some images still hadn't loaded, even after waiting.");
+    } else {
+      addNotice("Some images hadn't finished loading.", {
+        label: "Recapture, waiting for them",
+        run: async () => {
+          const response = await chrome.runtime.sendMessage({
+            type: "recapture",
+            tabId: capture.sourceTabId,
+            url: capture.pageUrl,
+          });
+          if (!response?.ok) throw new Error(response?.error || "Couldn't recapture the page.");
+        },
+      });
+    }
+  }
+
+  if (editor.parts) {
+    addNotice(`Too tall for one image, so it's saved in ${editor.parts.length} parts at full resolution.`, {
+      label: "Download one smaller image",
+      run: () => document.querySelector('[data-download="smaller"]').click(),
+    });
+  }
 }
 
 async function main() {
@@ -3165,7 +3336,8 @@ async function main() {
   ).textContent = `${editor.baseCanvas.width} x ${editor.baseCanvas.height}px`;
 
   setupDownloadActions(baseName);
-  setupPartControls(baseName);
+  setupPartControls();
+  setupDownloadMenu(baseName);
   setupJpegQuality(baseName);
   await setupCopyButton();
   await setupUploadButton();
@@ -3194,13 +3366,8 @@ async function main() {
   setupZoomControls();
   status.classList.remove("loading");
 
-  const notice = captureNotice(capture, stitchReport);
-  if (notice) {
-    status.textContent = notice;
-    status.hidden = false;
-  } else {
-    status.hidden = true;
-  }
+  status.hidden = true;
+  showCaptureNotices(capture, stitchReport);
 
   // The frames are large; drop them now that the image is rendered and saved.
   await chrome.storage.local.remove("capture");

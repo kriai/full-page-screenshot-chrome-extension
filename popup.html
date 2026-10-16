@@ -104,19 +104,20 @@
       background: var(--shelf-divider);
       transform: translateX(-0.5px);
     }
-    .option-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin: 8px 2px 0;
-      font-size: 12px;
+    .capture-fix {
+      margin-top: 10px;
+      border: 1px solid currentColor;
+      border-radius: 6px;
+      background: transparent;
       color: inherit;
-      opacity: 0.8;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 650;
+      padding: 6px 10px;
       cursor: pointer;
-      user-select: none;
     }
 
-    .option-row input { margin: 0; }
+    .capture-fix[hidden] { display: none; }
 
     .shelf-action {
       position: relative;
@@ -327,17 +328,6 @@
       <span>Full page screenshot</span>
     </button>
 
-    <label class="option-row" title="Waits for images and data still loading before each section. Slower, for pages that fill in late.">
-      <input type="checkbox" id="waitForContent">
-      <span>Wait for slow content</span>
-    </label>
-    <label class="option-row" title="Pages too tall for one image: keep full resolution in parts, or shrink to one image">
-      <span>Long pages</span>
-      <select id="longPages">
-        <option value="full">Full resolution, in parts</option>
-        <option value="shrink">Shrink to one image</option>
-      </select>
-    </label>
 
     <div class="capture-shelf">
       <button class="shelf-action" data-mode="selection" title="Select a region to capture">
@@ -394,6 +384,7 @@
     </div>
     <div class="capture-label" id="capture-label">Preparing page</div>
     <div class="capture-detail" id="capture-detail">Finding the page content to capture</div>
+    <button class="capture-fix" id="capture-fix" type="button" hidden>Open extension settings</button>
     <div class="progress-meta">
       <span id="capture-count">Starting</span>
       <span id="capture-percent">2%</span>

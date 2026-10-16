@@ -46,10 +46,18 @@ function updateProgress(message) {
   progressTrack.setAttribute("aria-valuenow", String(percent));
 }
 
-function showError(message) {
+// `reason` comes from page-access.js; a file page has a setting that fixes it,
+// so the card offers a way straight to it.
+function showError(message, reason) {
   showCaptureState();
   captureLabel.textContent = "Capture failed";
   captureDetail.textContent = message || "Please try again.";
+  const fix = document.getElementById("capture-fix");
+  fix.hidden = reason !== "file";
+  fix.onclick = () => {
+    chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
+    window.close();
+  };
   captureCount.textContent = "";
   capturePercent.textContent = "";
   captureProgress.style.width = "100%";
@@ -117,7 +125,7 @@ async function startCapture(mode, options = {}) {
         button.disabled = false;
       });
     } else {
-      showError(response?.error || "Capture failed.");
+      showError(response?.error || "Capture failed.", response?.reason);
     }
     return;
   }
@@ -127,35 +135,12 @@ async function startCapture(mode, options = {}) {
   if (mode === "selection" || options.pickTarget) window.close();
 }
 
-// Remembered between captures, and read by keyboard-shortcut captures too.
-const waitForContent = document.getElementById("waitForContent");
-chrome.storage.local.get("settings").then(({ settings = {} }) => {
-  waitForContent.checked = !!settings.waitForContent;
-});
-waitForContent.addEventListener("change", async () => {
-  const { settings = {} } = await chrome.storage.local.get("settings");
-  await chrome.storage.local.set({ settings: { ...settings, waitForContent: waitForContent.checked } });
-});
-
-const longPages = document.getElementById("longPages");
-chrome.storage.local.get("settings").then(({ settings = {} }) => {
-  longPages.value = settings.longPages === "shrink" ? "shrink" : "full";
-});
-longPages.addEventListener("change", async () => {
-  const { settings = {} } = await chrome.storage.local.get("settings");
-  await chrome.storage.local.set({ settings: { ...settings, longPages: longPages.value } });
-});
-
 buttons.forEach((button) => {
   button.addEventListener("click", (event) => {
     // Alt/Shift-click forces the scroll-area picker when the automatic choice
     // is wrong (pages with several independently scrolling panes).
-    const fullPage = button.dataset.mode === "fullPage";
-    const pickTarget = fullPage && (event.altKey || event.shiftKey);
-    startCapture(button.dataset.mode, {
-      pickTarget,
-      waitForContent: fullPage && waitForContent.checked,
-    });
+    const pickTarget = button.dataset.mode === "fullPage" && (event.altKey || event.shiftKey);
+    startCapture(button.dataset.mode, { pickTarget });
   });
 });
 
