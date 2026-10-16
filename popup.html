@@ -4,33 +4,38 @@
   <meta charset="utf-8" />
   <title>Screenshot Capture</title>
   <style>
+    /* Neutral graphite, like the editor. Every gap is a multiple of 4px; the
+       popup is 300 × 236 in every state so it never jumps. */
     * { box-sizing: border-box; }
     :root {
-      --panel: #121820;
-      --primary: #3869D9;
-      --primary-hover: #4274EA;
-      --shelf: #202A3A;
-      --shelf-hover: #263247;
-      --divider: #344154;
-      --shelf-divider: #435168;
-      --text: #FFFFFF;
-      --muted: #C4CEDD;
-      --focus: #8EA8F5;
+      --surface: #1c1c1c;
+      --control: #2a2a2a;
+      --control-hover: #333333;
+      --hairline: #2a2a2a;
+      --border: #3a3a3a;
+      --primary-bg: #f2f2f2;
+      --primary-fg: #111111;
+      --text-1: #ededed;
+      --text-2: #e0e0e0;
+      --text-3: #bdbdbd;
+      --text-4: #9b9b9b;
+      --text-5: #8a8a8a;
+      --danger: #e5484d;
+      --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, monospace;
     }
     html,
     body {
       margin: 0;
-      background: var(--panel);
+      background: var(--surface);
     }
     body {
       position: relative;
       width: 300px;
-      height: 244px;
-      padding: 16px;
-      border-radius: 8px;
-      color: var(--text);
-      font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+      height: 236px;
       overflow: hidden;
+      color: var(--text-1);
+      font: 13px var(--font);
     }
     button {
       margin: 0;
@@ -39,188 +44,116 @@
       cursor: pointer;
       font: inherit;
       padding: 0;
-      text-align: center;
-      transition:
-        background-color 140ms ease,
-        color 140ms ease,
-        opacity 140ms ease;
+      transition: background-color 140ms ease, color 140ms ease;
     }
     button:focus-visible {
-      outline: 2px solid var(--focus);
+      outline: 2px solid var(--text-1);
       outline-offset: 2px;
     }
-    button:disabled {
-      cursor: default;
-      opacity: 0.65;
+    button:disabled { cursor: default; }
+    [hidden] { display: none !important; }
+    svg { display: block; flex: none; }
+
+    /* ------------------------------- idle ------------------------------ */
+    .idle {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      height: 236px;
+      padding: 12px;
     }
-    .panel {
-      width: 268px;
-    }
-    .panel[hidden] { display: none; }
     .primary-action {
       display: flex;
       align-items: center;
-      justify-content: center;
       gap: 12px;
-      width: 268px;
-      height: 80px;
+      flex: none;
+      height: 84px;
       border-radius: 8px;
-      background: var(--primary);
-      font-size: 17px;
-      font-weight: 600;
-      line-height: 1;
-      white-space: nowrap;
+      background: var(--primary-bg);
+      color: var(--primary-fg);
+      padding: 0 16px;
+      text-align: left;
     }
-    .primary-action:hover {
-      background: var(--primary-hover);
-    }
-    .primary-action .icon {
-      width: 28px;
-      height: 28px;
-      flex: 0 0 auto;
-    }
-    .primary-action span:last-child {
-      min-width: 0;
-      flex: 0 1 auto;
-    }
-    .capture-shelf {
-      position: relative;
+    .primary-action:hover:not(:disabled) { background: #ffffff; }
+    .primary-action:disabled { opacity: 0.6; }
+    .primary-text { display: flex; flex-direction: column; gap: 4px; }
+    .primary-title { font-size: 15px; line-height: 20px; font-weight: 600; }
+    .primary-sub { color: #4a4a4a; font-size: 12px; line-height: 16px; }
+    .tiles {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      width: 268px;
-      height: 66px;
-      margin-top: 14px;
-      overflow: hidden;
-      border-radius: 8px;
-      background: var(--shelf);
+      gap: 8px;
+      flex: none;
+      height: 68px;
     }
-    .capture-shelf::before {
-      content: "";
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      left: 50%;
-      width: 1px;
-      background: var(--shelf-divider);
-      transform: translateX(-0.5px);
-    }
-    .capture-fix {
-      margin-top: 10px;
-      border: 1px solid currentColor;
-      border-radius: 6px;
-      background: transparent;
-      color: inherit;
-      font: inherit;
-      font-size: 12px;
-      font-weight: 650;
-      padding: 6px 10px;
-      cursor: pointer;
-    }
-
-    .capture-fix[hidden] { display: none; }
-
-    .shelf-action {
-      position: relative;
-      z-index: 1;
+    .tile {
       display: flex;
-      align-items: center;
       flex-direction: column;
+      align-items: center;
       justify-content: center;
-      gap: 6px;
-      width: 134px;
-      height: 66px;
-      background: transparent;
-      font-size: 14px;
-      font-weight: 600;
-      line-height: 1;
+      gap: 8px;
+      border-radius: 8px;
+      background: var(--control);
+      color: var(--text-1);
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 16px;
     }
-    .shelf-action:hover {
-      background: var(--shelf-hover);
-    }
-    .shelf-action .icon {
-      width: 24px;
-      height: 24px;
-      flex: 0 0 auto;
-    }
-    .section-divider {
-      width: 268px;
-      height: 1px;
-      margin-top: 14px;
-      background: var(--divider);
+    .tile:hover:not(:disabled) { background: var(--control-hover); }
+    .tile:disabled { opacity: 0.6; }
+    .history-slot {
+      display: flex;
+      align-items: flex-end;
+      flex: none;
+      height: 40px;
+      margin-top: 4px;
+      border-top: 1px solid var(--hairline);
     }
     .history-row {
       display: flex;
       align-items: center;
-      width: 268px;
-      height: 37px;
+      gap: 8px;
+      flex: 1;
+      height: 32px;
+      border-radius: 6px;
       background: transparent;
-      color: var(--muted);
-      font-size: 14px;
-      font-weight: 500;
-      line-height: 1;
+      color: var(--text-3);
+      padding: 0 8px;
       text-align: left;
     }
-    .history-row:hover {
-      color: var(--text);
-    }
-    .history-row .history-icon {
-      width: 20px;
-      height: 20px;
-      margin-right: 12px;
-      flex: 0 0 auto;
-    }
-    .history-row .chevron {
-      width: 16px;
-      height: 16px;
-      margin-left: auto;
-      flex: 0 0 auto;
-    }
-    svg {
-      display: block;
-      width: 100%;
-      height: 100%;
-      stroke: currentColor;
-    }
-    #status {
-      position: absolute;
-      right: 16px;
-      bottom: 4px;
-      left: 16px;
-      color: var(--muted);
-      font-size: 10px;
-      line-height: 1.2;
-      text-align: center;
-    }
-    #status:empty { display: none; }
-    #status.loading::after {
-      content: "...";
-      display: inline-block;
-      overflow: hidden;
-      width: 0;
-      text-align: left;
-      animation: dots 1100ms steps(4, end) infinite;
-      vertical-align: bottom;
-    }
-    .capture-state {
-      display: none;
-      width: 268px;
-      height: 212px;
-      align-items: center;
+    .history-row:hover { background: var(--control); color: var(--text-1); }
+    .history-row span { flex: 1; }
+
+    /* ------------------------ capturing and error ---------------------- */
+    .state {
+      display: flex;
       flex-direction: column;
-      justify-content: center;
+      align-items: center;
+      height: 236px;
+      padding: 16px 16px 12px;
       text-align: center;
     }
-    .capture-state.active { display: flex; }
+    /* The capture icon, kept exactly as it was (58px, blue, animated). It
+       sits centred in a 56px slot so the layout stays on the 4px grid. */
+    .icon-slot {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+      width: 56px;
+      height: 56px;
+    }
     .capture-visual {
       position: relative;
+      flex: none;
       width: 58px;
       height: 58px;
-      margin-bottom: 18px;
       overflow: hidden;
-      border: 1px solid #52617A;
+      border: 1px solid #52617a;
       border-radius: 14px;
-      background: #1B2432;
-      color: #8EA8F5;
+      background: #1b2432;
+      color: #8ea8f5;
       box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
     }
     .capture-visual svg {
@@ -229,6 +162,7 @@
       left: 15px;
       width: 28px;
       height: 28px;
+      stroke: currentColor;
     }
     .capture-scan {
       position: absolute;
@@ -236,68 +170,119 @@
       left: 8px;
       height: 2px;
       border-radius: 99px;
-      background: #78A0FF;
+      background: #78a0ff;
       box-shadow: 0 0 10px rgba(120, 160, 255, 0.85);
       animation: capture-scan 1300ms cubic-bezier(.45, 0, .55, 1) infinite;
-    }
-    .capture-label {
-      max-width: 244px;
-      font-size: 16px;
-      font-weight: 650;
-      line-height: 1.25;
-    }
-    .capture-detail {
-      min-height: 30px;
-      max-width: 244px;
-      margin-top: 6px;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-    .progress-meta {
-      display: flex;
-      justify-content: space-between;
-      width: 244px;
-      margin-top: 15px;
-      color: var(--muted);
-      font-size: 11px;
-      font-variant-numeric: tabular-nums;
-    }
-    .progress-track {
-      width: 244px;
-      height: 8px;
-      margin-top: 7px;
-      overflow: hidden;
-      border-radius: 999px;
-      background: #2A3547;
-    }
-    .progress-fill {
-      position: relative;
-      width: 2%;
-      height: 100%;
-      overflow: hidden;
-      border-radius: inherit;
-      background: linear-gradient(90deg, #3869D9, #78A0FF);
-      transition: width 260ms cubic-bezier(.2, .8, .2, 1);
-    }
-    .progress-fill::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      width: 45%;
-      background: linear-gradient(90deg, transparent, rgba(255,255,255,.48), transparent);
-      animation: progress-shine 1100ms ease-in-out infinite;
     }
     @keyframes capture-scan {
       0%, 100% { top: 9px; opacity: .55; }
       50% { top: 47px; opacity: 1; }
     }
-    @keyframes progress-shine {
-      from { transform: translateX(-120%); }
-      to { transform: translateX(240%); }
+    .error-badge {
+      position: absolute;
+      right: -4px;
+      bottom: -4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--danger);
+      box-shadow: 0 0 0 4px var(--surface);
     }
-    @keyframes dots {
-      to { width: 1.2em; }
+    .state-title {
+      max-width: 268px;
+      margin-top: 12px;
+      overflow: hidden;
+      font-size: 15px;
+      line-height: 20px;
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .state-detail {
+      max-width: 264px;
+      margin-top: 4px;
+      overflow: hidden;
+      color: var(--text-4);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    .state-detail.one-line { height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+    .state-detail.two-lines {
+      display: -webkit-box;
+      height: 32px;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+    .progress-meta {
+      display: flex;
+      justify-content: space-between;
+      align-self: stretch;
+      margin-top: 20px;
+      color: var(--text-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    .progress-meta .mono { font-family: var(--mono); }
+    .progress-track {
+      align-self: stretch;
+      flex: none;
+      height: 4px;
+      margin-top: 8px;
+      overflow: hidden;
+      border-radius: 2px;
+      background: var(--control);
+    }
+    .progress-fill {
+      width: 2%;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--text-1);
+      transition: width 260ms cubic-bezier(.2, .8, .2, 1);
+    }
+    .page-chip {
+      display: flex;
+      align-items: center;
+      flex: none;
+      max-width: 268px;
+      height: 24px;
+      margin-top: 12px;
+      overflow: hidden;
+      border-radius: 4px;
+      background: var(--control);
+      color: var(--text-3);
+      font: 11px var(--mono);
+      padding: 0 8px;
+      white-space: nowrap;
+    }
+    .page-chip span { overflow: hidden; text-overflow: ellipsis; }
+    .state-actions {
+      display: flex;
+      gap: 8px;
+      align-self: stretch;
+      margin-top: auto;
+    }
+    .outline-button {
+      flex: 1;
+      height: 32px;
+      border-radius: 6px;
+      background: transparent;
+      box-shadow: inset 0 0 0 1px var(--border);
+      color: var(--text-2);
+      font-size: 13px;
+    }
+    .outline-button:hover:not(:disabled) { background: var(--control); color: var(--text-1); }
+
+    /* Announced to screen readers; nothing visible needs it. */
+    #status {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
     }
     @media (prefers-reduced-motion: reduce) {
       *,
@@ -305,95 +290,86 @@
       *::after {
         animation-duration: 1ms !important;
         animation-iteration-count: 1 !important;
-        scroll-behavior: auto !important;
         transition-duration: 1ms !important;
       }
     }
   </style>
 </head>
 <body>
-  <main class="panel" id="capture-actions" aria-label="Screenshot actions">
+  <main class="idle" id="capture-actions" aria-label="Screenshot actions">
     <button class="primary-action" data-mode="fullPage" title="Capture and stitch the full page (Alt-click to choose which area scrolls)">
-      <span class="icon" aria-hidden="true">
-        <svg viewBox="0 0 32 32" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M9 4.5h9.5L24 10v17.5H9V4.5Z"></path>
-          <path d="M18.5 4.5V10H24"></path>
-          <path d="M13 15.5h3"></path>
-          <path d="M19 15.5h1.5v3"></path>
-          <path d="M20.5 22v1.5H17"></path>
-          <path d="M13 23.5h-1.5V20"></path>
-          <path d="M11.5 17v-1.5H13"></path>
-        </svg>
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"></path><path d="M14 3v4h4"></path><path d="M10 12h5M10 15.5h5M10 19h3"></path></svg>
+      <span class="primary-text">
+        <span class="primary-title">Full page</span>
+        <span class="primary-sub">Scrolls and captures the whole page</span>
       </span>
-      <span>Full page screenshot</span>
     </button>
 
-
-    <div class="capture-shelf">
-      <button class="shelf-action" data-mode="selection" title="Select a region to capture">
-        <span class="icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M8 4H5.5A1.5 1.5 0 0 0 4 5.5V8"></path>
-            <path d="M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8"></path>
-            <path d="M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16"></path>
-            <path d="M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"></path>
-          </svg>
-        </span>
+    <div class="tiles">
+      <button class="tile" data-mode="selection" title="Select a region to capture">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"></path></svg>
         <span>Select area</span>
       </button>
-      <button class="shelf-action" data-mode="visible" title="Capture the visible viewport">
-        <span class="icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3.5" y="6" width="17" height="13" rx="1.5"></rect>
-            <path d="M3.5 10h17"></path>
-            <path d="M7 8h.1"></path>
-            <path d="M10 8h.1"></path>
-            <path d="M13 8h.1"></path>
-          </svg>
-        </span>
+      <button class="tile" data-mode="visible" title="Capture the visible viewport">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18v14H3z"></path><path d="M3 9h18"></path></svg>
         <span>Visible area</span>
       </button>
     </div>
 
-    <div class="section-divider" aria-hidden="true"></div>
-
-    <button class="history-row" id="history" type="button" title="Open saved screenshots">
-      <span class="history-icon" aria-hidden="true">
-        <svg viewBox="0 0 20 20" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M3 10a7 7 0 1 0 2.1-5"></path>
-          <path d="M3 4v5h5"></path>
-          <path d="M10 6v4l2.5 1.5"></path>
-        </svg>
-      </span>
-      <span>History</span>
-      <span class="chevron" aria-hidden="true">
-        <svg viewBox="0 0 16 16" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="m6 3.5 4.5 4.5L6 12.5"></path>
-        </svg>
-      </span>
-    </button>
-  </main>
-  <section class="capture-state" id="capture-state" aria-live="polite" aria-label="Capture progress">
-    <div class="capture-visual" aria-hidden="true">
-      <svg viewBox="0 0 32 32" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M9 4.5h9.5L24 10v17.5H9V4.5Z"></path>
-        <path d="M18.5 4.5V10H24"></path>
-        <path d="M12.5 16h7M12.5 20h7"></path>
-      </svg>
-      <span class="capture-scan"></span>
+    <div class="history-slot">
+      <button class="history-row" id="history" type="button" title="Open saved screenshots">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8v4l3 2"></path><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"></path><path d="M3 3v4h4"></path></svg>
+        <span>History</span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8A8A8A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
+      </button>
     </div>
-    <div class="capture-label" id="capture-label">Preparing page</div>
-    <div class="capture-detail" id="capture-detail">Finding the page content to capture</div>
-    <button class="capture-fix" id="capture-fix" type="button" hidden>Open extension settings</button>
+  </main>
+
+  <section class="state" id="capture-state" aria-live="polite" aria-label="Capture progress" hidden>
+    <div class="icon-slot" aria-hidden="true">
+      <div class="capture-visual">
+        <svg viewBox="0 0 32 32" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 4.5h9.5L24 10v17.5H9V4.5Z"></path>
+          <path d="M18.5 4.5V10H24"></path>
+          <path d="M12.5 16h7M12.5 20h7"></path>
+        </svg>
+        <span class="capture-scan"></span>
+      </div>
+    </div>
+    <div class="state-title" id="capture-label">Preparing page</div>
+    <div class="state-detail one-line" id="capture-detail">Finding the page content to capture</div>
     <div class="progress-meta">
       <span id="capture-count">Starting</span>
-      <span id="capture-percent">2%</span>
+      <span class="mono" id="capture-percent">2%</span>
     </div>
     <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="2">
       <div class="progress-fill" id="capture-progress"></div>
     </div>
+    <div class="state-actions">
+      <button class="outline-button" id="capture-cancel" type="button">Cancel</button>
+    </div>
   </section>
-  <div id="status"></div>
+
+  <section class="state" id="error-state" role="alert" hidden>
+    <div class="icon-slot" aria-hidden="true">
+      <div class="capture-visual">
+        <svg viewBox="0 0 32 32" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 4.5h9.5L24 10v17.5H9V4.5Z"></path>
+          <path d="M18.5 4.5V10H24"></path>
+          <path d="M12.5 16h7M12.5 20h7"></path>
+        </svg>
+      </div>
+      <span class="error-badge"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M12 6v7M12 18h.01"></path></svg></span>
+    </div>
+    <div class="state-title" id="error-title">Can't capture this page</div>
+    <div class="state-detail two-lines" id="error-detail"></div>
+    <div class="page-chip" id="error-url" hidden><span></span></div>
+    <div class="state-actions">
+      <button class="outline-button" id="error-back" type="button">Back</button>
+      <button class="outline-button" id="capture-fix" type="button" hidden>Open settings</button>
+    </div>
+  </section>
+  <div id="status" aria-live="polite"></div>
   <script src="popup.js"></script>
 </body>
 </html>

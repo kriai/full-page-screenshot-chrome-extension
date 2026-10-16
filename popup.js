@@ -2,6 +2,7 @@ const status = document.getElementById("status");
 const buttons = Array.from(document.querySelectorAll("button[data-mode]"));
 const actions = document.getElementById("capture-actions");
 const captureState = document.getElementById("capture-state");
+const errorState = document.getElementById("error-state");
 const captureLabel = document.getElementById("capture-label");
 const captureDetail = document.getElementById("capture-detail");
 const captureCount = document.getElementById("capture-count");
@@ -9,6 +10,10 @@ const capturePercent = document.getElementById("capture-percent");
 const captureProgress = document.getElementById("capture-progress");
 const progressTrack = document.querySelector(".progress-track");
 const prefersReducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// Set once Cancel is pressed, so the progress and error messages the stopping
+// run still sends don't bring its card back.
+let canceledByUser = false;
 
 // Keeping the popup connected serves two purposes: it receives live progress,
 // and it can take viewport snapshots for the worker while it remains open,
@@ -18,13 +23,18 @@ const prefersReducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matc
 // keeps showing status.
 const port = chrome.runtime.connect({ name: "capture-popup" });
 
+// One of the three cards: the capture buttons, progress, or a failure.
+function showView(view) {
+  actions.hidden = view !== actions;
+  captureState.hidden = view !== captureState;
+  errorState.hidden = view !== errorState;
+}
+
 function showCaptureState() {
-  actions.hidden = true;
   status.textContent = "";
-  status.classList.remove("loading");
-  captureState.classList.add("active");
-  if (!prefersReducedMotion && !captureState.dataset.entered) {
-    captureState.dataset.entered = "1";
+  if (!captureState.hidden) return;
+  showView(captureState);
+  if (!prefersReducedMotion) {
     captureState.animate(
       [
         { opacity: 0, transform: "translateY(8px) scale(.98)" },
@@ -35,7 +45,18 @@ function showCaptureState() {
   }
 }
 
+function showIdle() {
+  showView(actions);
+  buttons.forEach((button) => {
+    button.disabled = false;
+  });
+  captureProgress.style.width = "2%";
+  status.textContent = "";
+  buttons[0].focus();
+}
+
 function updateProgress(message) {
+  if (canceledByUser) return;
   showCaptureState();
   const percent = Math.max(0, Math.min(100, Math.round(Number(message.percent) || 0)));
   captureLabel.textContent = message.label || "Capturing screenshot";
@@ -46,23 +67,50 @@ function updateProgress(message) {
   progressTrack.setAttribute("aria-valuenow", String(percent));
 }
 
-// `reason` comes from page-access.js; a file page has a setting that fixes it,
-// so the card offers a way straight to it.
-function showError(message, reason) {
-  showCaptureState();
-  captureLabel.textContent = "Capture failed";
-  captureDetail.textContent = message || "Please try again.";
+// Shorter wording for the popup's two-line message, where page-access.js has
+// a longer explanation for the toolbar badge.
+const BLOCKED_COPY = {
+  browser: "Chrome blocks extensions on its own pages. Open a regular website and try again.",
+  file: "Allow file access in the extension's settings to capture files on your computer.",
+};
+
+// `reason` comes from page-access.js and means the page can't be captured at
+// all; a file page has a setting that fixes it, so the card offers a way
+// straight to it. `url` is the tab's address, when the worker could see it.
+function showError(message, { reason, url, canceled } = {}) {
+  if (canceledByUser) return;
+  showView(errorState);
+  document.getElementById("error-title").textContent = reason
+    ? "Can't capture this page"
+    : canceled
+      ? "Capture stopped"
+      : "Capture failed";
+  const detail = document.getElementById("error-detail");
+  detail.textContent = BLOCKED_COPY[reason] || message || "Please try again.";
+  detail.title = message || "";
+  const chip = document.getElementById("error-url");
+  chip.hidden = !url;
+  chip.firstElementChild.textContent = url || "";
+  chip.title = url || "";
   const fix = document.getElementById("capture-fix");
   fix.hidden = reason !== "file";
   fix.onclick = () => {
     chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
     window.close();
   };
-  captureCount.textContent = "";
-  capturePercent.textContent = "";
-  captureProgress.style.width = "100%";
-  captureProgress.style.background = "#D14B55";
+  document.getElementById("error-back").focus();
 }
+
+document.getElementById("error-back").addEventListener("click", showIdle);
+
+// Cancel asks the worker to stop the run in this tab; it stops at the next
+// frame, restores the page and deletes what it had captured.
+document.getElementById("capture-cancel").addEventListener("click", async () => {
+  canceledByUser = true;
+  showIdle();
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  chrome.runtime.sendMessage({ type: "cancelCapture", tabId: tab?.id }).catch(() => {});
+});
 
 port.onMessage.addListener((message) => {
   if (message?.type === "captureViewport") {
@@ -79,7 +127,9 @@ port.onMessage.addListener((message) => {
   }
   if (message?.type === "closeForPicker") window.close();
   if (message?.type === "captureProgress") updateProgress(message);
-  if (message?.type === "captureError") showError(message.error);
+  if (message?.type === "captureError") {
+    showError(message.error, { url: message.url, canceled: message.canceled });
+  }
 });
 
 async function startCapture(mode, options = {}) {
@@ -88,13 +138,13 @@ async function startCapture(mode, options = {}) {
     visible: "Capturing visible area",
     selection: "Open page and drag an area",
   };
+  canceledByUser = false;
   buttons.forEach((button) => {
     button.disabled = true;
   });
 
   if (mode === "selection") {
     status.textContent = labels.selection;
-    status.classList.add("loading");
   } else {
     updateProgress({
       percent: mode === "visible" ? 12 : 2,
@@ -118,15 +168,7 @@ async function startCapture(mode, options = {}) {
   }
 
   if (!response || !response.ok) {
-    if (mode === "selection") {
-      status.textContent = response?.error || "Capture failed.";
-      status.classList.remove("loading");
-      buttons.forEach((button) => {
-        button.disabled = false;
-      });
-    } else {
-      showError(response?.error || "Capture failed.", response?.reason);
-    }
+    showError(response?.error || "Capture failed.", { reason: response?.reason, url: response?.url });
     return;
   }
 

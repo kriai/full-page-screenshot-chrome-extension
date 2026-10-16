@@ -85,7 +85,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const access = await checkPageAccess(tab);
     if (!access.ok) {
-      sendResponse({ ok: false, error: access.message, reason: access.reason });
+      sendResponse({ ok: false, error: access.message, reason: access.reason, url: tab?.url || "" });
       return;
     }
 
@@ -97,6 +97,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   });
 
   return true;
+});
+
+// The popup's Cancel. A run checks for this between frames, then restores
+// the page and deletes the frames it took, as when the tab changes under it.
+// A run that has not begun its session yet picks the request up when it does.
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type !== "cancelCapture") return false;
+  const tabId = message.tabId;
+  if (activeSessions.has(tabId)) cancelSession(tabId, "Capture canceled.");
+  else if (tabId) pendingCancels.add(tabId);
+  sendResponse({ ok: true });
+  return false;
 });
 
 // One capture, started from the popup or a keyboard shortcut. Failures are
@@ -120,8 +132,12 @@ async function runCapture(tab, mode, options = {}) {
     postToCapturePopup({
       type: "captureError",
       error: err?.canceled ? err.message : FpsPageAccess.explainError(err),
+      canceled: !!err?.canceled,
+      url: tab.url || "",
     });
     if (!err?.concurrent) await cleanupCaptureTab(tab.id);
+  } finally {
+    pendingCancels.delete(tab.id);
   }
 }
 
@@ -561,6 +577,8 @@ const BUDGET = {
 
 let lastCaptureAt = 0;
 const activeSessions = new Map();
+// Tabs whose capture was cancelled from the popup before its session began.
+const pendingCancels = new Set();
 
 // Chrome's screenshot quota is a rate, not a spacing: it allows a short burst
 // and then throttles. Spacing every single capture evenly leaves that burst
@@ -1175,7 +1193,7 @@ function beginSession(tab) {
     frameKeys: [],
     handedOff: false,
     startedAt: Date.now(),
-    canceledReason: "",
+    canceledReason: pendingCancels.delete(tab.id) ? "Capture canceled." : "",
   };
   activeSessions.set(tab.id, session);
   return session;
