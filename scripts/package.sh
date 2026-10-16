@@ -8,6 +8,8 @@
 #   ./scripts/package.sh                    build zip into repo root
 #   ./scripts/package.sh dist               build zip into dist/
 #   ./scripts/package.sh --list             print the files that would ship
+#   ./scripts/package.sh --list-worktree    same, plus untracked files not yet
+#                                           added (used by the test build)
 #   ./scripts/package.sh --changed-since R  print shipped files changed since ref R
 #
 set -euo pipefail
@@ -25,6 +27,8 @@ EXCLUDES=(
   ':!:.gitignore'
   ':!:LICENSE'
   ':!:*.zip'
+  ':!:package.json'
+  ':!:package-lock.json'
 )
 
 shipped_files() {
@@ -33,6 +37,13 @@ shipped_files() {
 
 if [[ "${1:-}" == "--list" ]]; then
   shipped_files | tr '\0' '\n'
+  exit 0
+fi
+
+# The test build runs against work in progress, so a new source file counts
+# before it is committed. Ignored files still never ship.
+if [[ "${1:-}" == "--list-worktree" ]]; then
+  git ls-files -z --cached --others --exclude-standard -- . "${EXCLUDES[@]}" | tr '\0' '\n'
   exit 0
 fi
 

@@ -16,6 +16,6 @@
 <script src="rows.js"></script>
 <script>
   buildRows(document.getElementById("top"), 40, { label: "outer" });
-  buildRows(document.getElementById("inner"), 60, { label: "inner" });
-  buildRows(document.getElementById("bottom"), 40, { label: "outer" });
+  buildRows(document.getElementById("inner"), 60, { label: "inner", start: 40 });
+  buildRows(document.getElementById("bottom"), 40, { label: "outer", start: 100 });
 </script>

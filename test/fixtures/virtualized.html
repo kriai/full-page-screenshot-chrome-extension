@@ -11,6 +11,7 @@
 <div class="viewport" id="viewport">
   <div class="spacer" id="spacer"></div>
 </div>
+<script src="rows.js"></script>
 <script>
   // Only the rows near the viewport exist in the DOM; the rest are recycled.
   const TOTAL = 400;
@@ -31,6 +32,7 @@
       row.innerHTML = `<span class="num">${String(i + 1).padStart(4, "0")}</span>
         <span class="bar" style="background:hsl(${(i * 7) % 360} 80% 55%)"></span>
         <span class="label">virtual row ${i + 1}</span>`;
+      row.prepend(rowCode(i));
       spacer.appendChild(row);
     }
   }

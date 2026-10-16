@@ -1,0 +1,28 @@
+name: Test
+
+# Unit tests and the end-to-end suite, which loads the extension in Chromium
+# and captures every fixture page. Runs on pull requests and on the release
+# staging branch; the release workflow handles main.
+
+on:
+  pull_request:
+  push:
+    branches: [next]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Unit tests
+        run: npm test
+      - name: End-to-end tests
+        run: npm run test:e2e

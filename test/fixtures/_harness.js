@@ -35,13 +35,13 @@ globalThis.__fpsHarness = async function (opts = {}) {
 
   for (let i = 0; i < (opts.maxFrames || 80); i++) {
     await P.scrollAndSettle({ top: walk.nextTop(scrollRange), timeoutMs: 1200 });
-    let measured = P.measureFrame({ isFirst: i === 0 });
+    let measured = await P.measureFrame({ isFirst: i === 0 });
 
     const shortfall = walk.repairShortfall(measured);
     if (shortfall) {
       repairs++;
       await P.scrollAndSettle({ top: Math.max(0, measured.scrollTop - shortfall), timeoutMs: 800 });
-      measured = P.measureFrame({ isFirst: false });
+      measured = await P.measureFrame({ isFirst: false });
     }
 
     contentHeight = Math.max(contentHeight, measured.contentHeight);

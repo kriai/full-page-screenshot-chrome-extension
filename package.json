@@ -1,0 +1,13 @@
+{
+  "name": "full-page-screenshot",
+  "private": true,
+  "description": "Development tooling only. Nothing in here ships with the extension.",
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "test:e2e": "node scripts/test-build.mjs && node --test --test-concurrency=1 \"test/e2e/*.e2e.mjs\"",
+    "benchmark": "node scripts/test-build.mjs && node scripts/benchmark.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.64.1"
+  }
+}

@@ -25,6 +25,7 @@
       img.height = 48;
       img.src = svg(i);
       row.appendChild(img);
+      row.prepend(rowCode(i));
       host.appendChild(row);
     }
   }

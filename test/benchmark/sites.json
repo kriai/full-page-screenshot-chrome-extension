@@ -1,0 +1,19 @@
+[
+  { "id": "wikipedia-article", "url": "https://en.wikipedia.org/wiki/Python_(programming_language)", "covers": "long text, images, document scroll" },
+  { "id": "paulgraham-essay", "url": "https://paulgraham.com/greatwork.html", "covers": "very long plain text" },
+  { "id": "mdn-reference", "url": "https://developer.mozilla.org/en-US/docs/Web/CSS/position", "covers": "docs with sticky sidebar and header" },
+  { "id": "react-docs", "url": "https://react.dev/reference/react/useState", "covers": "docs app with sticky navigation, code blocks" },
+  { "id": "github-readme", "url": "https://github.com/microsoft/playwright/blob/main/README.md", "covers": "sticky file header, app chrome" },
+  { "id": "npm-package", "url": "https://www.npmjs.com/package/playwright", "covers": "long readme, sidebar" },
+  { "id": "stackoverflow-question", "url": "https://stackoverflow.com/questions/11227809/why-is-processing-a-sorted-array-faster-than-processing-an-unsorted-array", "covers": "cookie banner, sticky header, long thread" },
+  { "id": "hacker-news", "url": "https://news.ycombinator.com/", "covers": "short plain page, control case" },
+  { "id": "apple-iphone", "url": "https://www.apple.com/iphone/", "covers": "scroll animations, video, sticky product nav" },
+  { "id": "stripe-home", "url": "https://stripe.com/", "covers": "animated marketing page, canvas gradient" },
+  { "id": "linear-home", "url": "https://linear.app/", "covers": "scroll-reveal animations, dark theme" },
+  { "id": "the-verge", "url": "https://www.theverge.com/", "covers": "news front page, ads, lazy images" },
+  { "id": "unsplash-topic", "url": "https://unsplash.com/t/nature", "covers": "lazy image grid, infinite scroll" },
+  { "id": "dev-to-feed", "url": "https://dev.to/", "covers": "infinite feed" },
+  { "id": "google-fonts", "url": "https://fonts.google.com/", "covers": "single-page app, lazy grid, inner scroller" },
+  { "id": "tailwind-docs", "url": "https://tailwindcss.com/docs/installation", "covers": "docs app shell" },
+  { "id": "whatwg-parsing", "url": "https://html.spec.whatwg.org/multipage/parsing.html", "covers": "far past the canvas limit" }
+]

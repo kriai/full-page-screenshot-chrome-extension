@@ -161,9 +161,27 @@ export controls.
 
 ## Tests
 
-- `node --test "test/*.test.mjs"` covers the shared geometry and replays the
-  capture walk against simulated pages (sticky headers, pinned bars appearing
-  mid-run, lazy growth, single-frame pages).
+Install the tooling once with `npm install` and `npx playwright install
+chromium`. None of it ships: `package.json` and `node_modules` are outside the
+packaged file set.
+
+- `npm test` covers the shared geometry and replays the capture walk against
+  simulated pages (sticky headers, pinned bars appearing mid-run, lazy growth,
+  single-frame pages).
+- `npm run test:e2e` loads the extension in Chromium and captures every
+  fixture page at 1x, two of them at 2x, plus a visible-area capture. Each
+  fixture row carries a black-and-white code at its left edge; the test reads
+  the codes back out of the finished image and fails on any row that is
+  missing, repeated, out of order or the wrong height. `HEADED=1` shows the
+  browser. It runs against a test build (`scripts/test-build.mjs`, written to
+  `build/test-extension/`) that adds host access to every site, because
+  `activeTab` is only granted by a real click.
+- `npm run benchmark` captures the real sites in `test/benchmark/sites.json`
+  and prints frames, time, partial captures, downscaling, gaps, seam shifts
+  and re-takes, and frames shot while images were still loading. Images and
+  `results.json` go to `build/benchmark/`. Compare two runs with
+  `node scripts/benchmark.mjs --compare <before.json> <after.json>`; sites
+  change daily, so only compare runs made on the same day.
 - `test/fixtures/*.html` are manual pages for the real extension: document
   scrolling, a fixed app shell, nested scrollers, two competing panes, sticky
   and fixed chrome, lazy images with a growing page, a virtualized list, and a

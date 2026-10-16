@@ -1287,7 +1287,7 @@ async function runCaptureLoop(tab, session, target) {
       });
 
       const requestedTop = walk.nextTop(scrollRange);
-      await callPage(tabId, "scrollAndSettle", { top: requestedTop, timeoutMs: 1500 });
+      const settle = await callPage(tabId, "scrollAndSettle", { top: requestedTop, timeoutMs: 1500 });
       // The frame that lands at the very bottom is where bottom-pinned page
       // furniture belongs, so the page side is told which one that is.
       const isLast = requestedTop >= scrollRange - 1;
@@ -1439,6 +1439,10 @@ async function runCaptureLoop(tab, session, target) {
         seamDiff: seam.diff,
         seamBase: seam.base,
         seamRetried: seam.retried,
+        // Images on screen still loading when the shot was taken, and how
+        // long the page took to settle: what a slow-content wait would fix.
+        pendingImages: settle?.pending ?? null,
+        settleMs: settle?.settleMs ?? null,
         trimTop: measured.trimTop,
         trimBottom: measured.trimBottom,
         blockedMiddle: measured.blockedMiddle,

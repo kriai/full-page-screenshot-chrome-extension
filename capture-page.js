@@ -841,8 +841,11 @@
   // exact inline style so it can be restored. Fixed overlays are hidden (after
   // the first frame keeps page headers once); sticky elements and pinned
   // descendants of the target are never hidden, the band is trimmed instead.
-  function fpsMeasureFrame(request) {
+  async function fpsMeasureFrame(request) {
     const isFirst = !!request?.isFirst;
+    // What was hidden going in, so the end of this pass can tell whether the
+    // screen actually has to change before the screenshot.
+    const hiddenBefore = new Set(document.querySelectorAll("[data-fps-prev-visibility]"));
     // Start from a clean page: an element that was pinned over the last frame
     // may have scrolled back into its natural place in this one.
     fpsRestoreVisibility();
@@ -988,6 +991,18 @@
       node.style.setProperty("visibility", "hidden", "important");
     }
 
+    // The screenshot is taken the moment this returns, and it records the last
+    // frame the browser painted - not the styles just written. Without a paint
+    // in between, a bar hidden for the first time is still in the shot: the
+    // first frame of every capture used to carry its bottom-pinned bar over
+    // the content. Later frames rarely change anything, so they rarely wait.
+    const hiddenNow = new Set(toHide);
+    const changed =
+      toUnpin.length > 0 ||
+      hiddenNow.size !== hiddenBefore.size ||
+      [...hiddenNow].some((node) => !hiddenBefore.has(node));
+    if (changed) await fpsNextPaint();
+
     // A mis-measured occluder must not eat the frame; past this much the band
     // is reported as blocked instead of being trimmed away.
     const maxTrim = (bandBottom - bandTop) * 0.45;
@@ -1040,6 +1055,16 @@
       source: { left: bandLeft, top: sourceTop, width: sourceWidth, height: sourceHeight },
       dest: { top: scrollTop + (sourceTop - originTop) },
     };
+  }
+
+  // Resolves once a frame that includes the latest style writes has been
+  // painted: the second animation frame only fires after the first was drawn.
+  // Raced against a timer because animation frames stop in a background tab.
+  function fpsNextPaint() {
+    return Promise.race([
+      new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+      new Promise((resolve) => setTimeout(resolve, 100)),
+    ]);
   }
 
   // Idempotent: safe to run after success, failure or cancellation, and safe to
